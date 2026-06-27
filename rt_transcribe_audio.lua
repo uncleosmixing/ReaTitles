@@ -1,5 +1,5 @@
 -- @description Transcribe audio items to subtitle text items (Whisper)
--- @version 1.2.4
+-- @version 1.2.5
 -- @author ReaTitles
 -- @changelog + Initial release
 -- @about
@@ -10,7 +10,7 @@
 
 local PYTHON_SCRIPT = "rt_whisper_transcribe.py"
 local SUBTITLE_TRACK_NAME = "Subtitles"
-local SCRIPT_VERSION = "1.2.4"
+local SCRIPT_VERSION = "1.2.5"
 local r = reaper
 
 local function msg(s) r.ShowConsoleMsg(tostring(s) .. "\n") end

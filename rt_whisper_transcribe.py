@@ -14,8 +14,8 @@ import time
 import tempfile
 import multiprocessing
 
-# Strict offline mode. These are assigned (not setdefault) so a parent process
-# cannot accidentally re-enable Hugging Face network access.
+# Cached models are always preferred. Network access is enabled temporarily only
+# when the requested model is absent and must be downloaded once.
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
@@ -164,18 +164,28 @@ def extract_audio(src_path, start_sec, duration_sec, output_path, ffmpeg_path):
 
 
 def create_model(model_size="small", progress=None):
-    from faster_whisper import WhisperModel
     cached_model = find_cached_model(model_size)
-    if not cached_model:
-        raise RuntimeError(
-            f"Offline Whisper model '{model_size}' was not found in the local "
-            "Hugging Face cache. Install/copy the model locally before running "
-            "ReaTitles; online downloads are disabled.")
-    model_source = cached_model
-    if progress:
-        progress(
-            phase="model",
-            detail=f"Loading offline Whisper model: {model_size}")
+    if cached_model:
+        model_source = cached_model
+        local_only = True
+        if progress:
+            progress(
+                phase="model",
+                detail=f"Loading cached Whisper model: {model_size}")
+    else:
+        os.environ["HF_HUB_OFFLINE"] = "0"
+        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+        model_source = model_size
+        local_only = False
+        if progress:
+            progress(
+                phase="model_download",
+                detail=f"Downloading Whisper model once: {model_size}")
+        print(
+            f"[Whisper] Model '{model_size}' is not cached. "
+            "Downloading it once from Hugging Face...", file=sys.stderr)
+
+    from faster_whisper import WhisperModel
     print(
         f"[Whisper] Loading model '{model_source}' "
         f"(CPU, int8, {CPU_COUNT} threads)...", file=sys.stderr)
@@ -185,8 +195,11 @@ def create_model(model_size="small", progress=None):
         device="cpu",
         compute_type="int8",
         cpu_threads=CPU_COUNT,
-        num_workers=min(4, CPU_COUNT)
+        num_workers=min(4, CPU_COUNT),
+        local_files_only=local_only,
     )
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
     print(f"[Whisper] Model loaded in {time.time()-t0:.1f}s", file=sys.stderr)
     if progress:
         progress(phase="model_ready", detail="Whisper model loaded")
