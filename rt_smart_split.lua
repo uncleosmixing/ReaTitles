@@ -67,6 +67,39 @@ local function fallback_split_text(text, ratio)
   return left, right
 end
 
+local function find_split_pos_by_words(text, words)
+  text = tostring(text or "")
+  if not words or #words == 0 then return 0 end
+  
+  local last_end = 1
+  for _, w in ipairs(words) do
+    local word_text = w[3]
+    if word_text and word_text ~= "" then
+      local clean_word = word_text:gsub("^%s+", ""):gsub("%s+$", ""):gsub("[%p%s]", ""):lower()
+      if clean_word ~= "" then
+        local found = false
+        local search_pos = last_end
+        while search_pos <= #text do
+          local s, e = text:find("%S+", search_pos)
+          if not s then break end
+          local text_word = text:sub(s, e):lower():gsub("[%p%s]", "")
+          if text_word:find(clean_word, 1, true) or clean_word:find(text_word, 1, true) then
+            last_end = e + 1
+            found = true
+            break
+          end
+          search_pos = e + 1
+        end
+        if not found then
+          local s, e = text:find("%S+", last_end)
+          if e then last_end = e + 1 end
+        end
+      end
+    end
+  end
+  return last_end - 1
+end
+
 local function update_take_name(item, text)
   local take = r.GetActiveTake(item)
   if not take then return end
@@ -182,8 +215,14 @@ local function main()
                 target.words, 0, cut_offset, 0)
               local right_words = subtitle_model.words_for_range(
                 target.words, cut_offset, item_length, cut_offset)
-              left_text = subtitle_model.text_from_words(left_words)
-              right_text = subtitle_model.text_from_words(right_words)
+              local split_pos = find_split_pos_by_words(target.notes, left_words)
+              if split_pos > 0 then
+                left_text = target.notes:sub(1, split_pos):gsub("%s+$", "")
+                right_text = target.notes:sub(split_pos + 1):gsub("^%s+", "")
+              else
+                left_text = ""
+                right_text = target.notes:gsub("^%s+", "")
+              end
               subtitle_model.set_relative_words(target.item, left_words)
               subtitle_model.set_relative_words(right, right_words)
             else
