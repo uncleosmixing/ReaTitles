@@ -6,3 +6,5 @@ rt_progress.json
 *.tmp
 *.rpp
 *.rpp-bak
+__pycache__/
+*.pyc
