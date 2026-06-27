@@ -11,7 +11,7 @@ Prompter, subtitle import, offline faster-whisper transcription, phrase colors, 
 Requires ReaImGui. See README.md for optional transcription dependencies.
         ]]></description>
       </metadata>
-      <version name="1.1.0" author="Chirick, ReaTitles contributors">
+      <version name="1.1.1" author="Chirick, ReaTitles contributors">
         <source main="main">https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/ch_prompter.lua</source>
         <source file="ch_import_text_items_from_sub.lua" main="main">https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/ch_import_text_items_from_sub.lua</source>
         <source file="rt_transcribe_audio.lua" main="main">https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/rt_transcribe_audio.lua</source>

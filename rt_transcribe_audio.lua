@@ -1,5 +1,5 @@
 -- @description Transcribe audio items to subtitle text items (Whisper)
--- @version 1.1.0
+-- @version 1.1.1
 -- @author ReaTitles
 -- @changelog + Initial release
 -- @about
@@ -371,6 +371,16 @@ local function main()
     end
     if not status.ok then
       local err = status.error or "Unknown Python/FFmpeg error"
+      local log_content = ""
+      local log_file = io.open(log_path, "r")
+      if log_file then
+        log_content = log_file:read("*a") or ""
+        log_file:close()
+      end
+      msg("[ReaTitles ERROR] Transcription failed: " .. tostring(err))
+      if log_content ~= "" then
+        msg("[ReaTitles transcription log]\n" .. log_content)
+      end
       cleanup_temp()
       r.ShowMessageBox("Transcription failed:\n" .. err .. "\n\nLog:\n" .. log_path, "ReaTitles", 0)
       return true

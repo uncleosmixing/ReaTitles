@@ -37,8 +37,14 @@ local function run_bridge(mode, data, docx)
   local command = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ' ..
     quote(BRIDGE) .. ' -Mode ' .. mode .. ' -DataPath ' .. quote(data) ..
     ' -DocxPath ' .. quote(docx)
-  local exit_code = r.ExecProcess(command, 120000)
-  return tonumber(exit_code) == 0
+  local exit_code, output = r.ExecProcess(command, 120000)
+  if tonumber(exit_code) ~= 0 then
+    r.ShowConsoleMsg(
+      "[ReaTitles ERROR] Word " .. mode .. " failed.\n" ..
+      tostring(output or "") .. "\n")
+    return false
+  end
+  return true
 end
 
 local function notes(item)
