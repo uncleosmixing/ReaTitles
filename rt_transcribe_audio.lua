@@ -1,5 +1,5 @@
 -- @description Transcribe audio items to subtitle text items (Whisper)
--- @version 1.2.7
+-- @version 1.3.0
 -- @author ReaTitles
 -- @changelog + Initial release
 -- @about
@@ -23,6 +23,16 @@ local function get_script_dir()
     if path then return path:match("^(.*[/\\])") or "" end
   end
   return ""
+end
+
+local model_ok, subtitle_model =
+  pcall(dofile, get_script_dir() .. "rt_subtitle_model.lua")
+if not model_ok then
+  r.ShowMessageBox(
+    "ReaTitles installation is incomplete: rt_subtitle_model.lua is missing.\n\n" ..
+    tostring(subtitle_model),
+    "ReaTitles dependency error", 0)
+  return
 end
 
 local function find_python()
@@ -222,31 +232,27 @@ local function create_text_item(track, start_time, end_time, text)
   return item
 end
 
--- Store absolute project-time word boundaries in a compact item extension.
--- REAPER copies P_EXT fields when an item is split, allowing Prompter to
--- reconstruct the correct text independently for every resulting piece.
+-- Store word boundaries relative to the subtitle item. Relative timing remains
+-- valid through item movement and REAPER Ripple Edit.
 local function store_word_timing(item, words, item_pos, rate)
   if not item or type(words) ~= "table" or #words == 0 then return end
-  local rows = {}
+  local item_start = r.GetMediaItemInfo_Value(item, "D_POSITION")
+  local relative_words = {}
   for _, word in ipairs(words) do
     if type(word) == "table" and tonumber(word[1]) and tonumber(word[2]) and
        type(word[3]) == "string" then
       local start_pos = item_pos + tonumber(word[1]) / rate
       local end_pos = item_pos + tonumber(word[2]) / rate
       local text = word[3]:gsub("[\r\n\t]", " ")
-      rows[#rows+1] = string.format("%.9f\t%.9f\t%s", start_pos, end_pos, text)
+      relative_words[#relative_words + 1] = {
+        start_pos - item_start,
+        end_pos - item_start,
+        text,
+      }
     end
   end
-  if #rows > 0 then
-    r.GetSetMediaItemInfo_String(
-      item, "P_EXT:REATITLES_WORD_TIMING", table.concat(rows, "\n"), true)
-    local anchor = r.GetMediaItemInfo_Value(item, "D_POSITION")
-    r.GetSetMediaItemInfo_String(
-      item, "P_EXT:REATITLES_TIMING_ANCHOR",
-      string.format("%.9f", anchor), true)
-    r.GetSetMediaItemInfo_String(
-      item, "P_EXT:REATITLES_TIMING_LENGTH",
-      string.format("%.9f", r.GetMediaItemInfo_Value(item, "D_LENGTH")), true)
+  if #relative_words > 0 then
+    subtitle_model.set_relative_words(item, relative_words)
   end
 end
 

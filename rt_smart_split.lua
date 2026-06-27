@@ -1,5 +1,5 @@
 -- @description ReaTitles Smart Split
--- @version 1.2.0
+-- @version 1.3.0
 -- @author ReaTitles
 -- @about
 --   Split selected subtitle/audio groups at the edit cursor.
@@ -7,7 +7,17 @@
 
 local r = reaper
 local EPSILON = 0.000001
-local WORD_TIMING_KEY = "P_EXT:REATITLES_WORD_TIMING"
+local script_source = (debug.getinfo(1, "S") or {}).source or ""
+local script_dir = script_source:match("^@(.+[\\/])") or ""
+local model_ok, subtitle_model =
+  pcall(dofile, script_dir .. "rt_subtitle_model.lua")
+if not model_ok then
+  r.ShowMessageBox(
+    "ReaTitles installation is incomplete: rt_subtitle_model.lua is missing.\n\n" ..
+    tostring(subtitle_model),
+    "ReaTitles dependency error", 0)
+  return
+end
 
 local function get_string(item, key)
   local _, value = r.GetSetMediaItemInfo_String(item, key, "", false)
@@ -16,30 +26,6 @@ end
 
 local function set_string(item, key, value)
   r.GetSetMediaItemInfo_String(item, key, value or "", true)
-end
-
-local function parse_words(metadata)
-  local words = {}
-  for row in (metadata or ""):gmatch("[^\r\n]+") do
-    local start_pos, end_pos, text =
-      row:match("^([%-%d%.]+)\t([%-%d%.]+)\t(.*)$")
-    start_pos, end_pos = tonumber(start_pos), tonumber(end_pos)
-    if start_pos and end_pos and text then
-      words[#words+1] = { start_pos, end_pos, text }
-    end
-  end
-  return words
-end
-
-local function text_for_range(words, range_start, range_end)
-  local parts = {}
-  for _, word in ipairs(words) do
-    local midpoint = (word[1] + word[2]) * 0.5
-    if midpoint >= range_start - EPSILON and midpoint < range_end - EPSILON then
-      parts[#parts+1] = word[3]
-    end
-  end
-  return table.concat(parts):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
 local function fallback_split_text(text, ratio)
@@ -115,7 +101,8 @@ local function collect_targets(cursor)
             item_end = item_end,
             group_id = group_id,
             notes = get_string(item, "P_NOTES"),
-            metadata = get_string(item, WORD_TIMING_KEY),
+            words = (not r.GetActiveTake(item))
+              and subtitle_model.get_relative_words(item, false) or {},
           }
         end
       end
@@ -186,18 +173,19 @@ local function main()
             r.SetMediaItemInfo_Value(right, "I_GROUPID", groups.right)
           end
 
-          if target.notes ~= "" or target.metadata ~= "" then
-            -- SplitMediaItem may not copy extension data on every REAPER build.
-            if target.metadata ~= "" then
-              set_string(target.item, WORD_TIMING_KEY, target.metadata)
-              set_string(right, WORD_TIMING_KEY, target.metadata)
-            end
-
+          if target.notes ~= "" or #target.words > 0 then
             local left_text, right_text
-            local words = parse_words(target.metadata)
-            if #words > 0 then
-              left_text = text_for_range(words, target.pos, cursor)
-              right_text = text_for_range(words, cursor, target.item_end)
+            if #target.words > 0 then
+              local cut_offset = cursor - target.pos
+              local item_length = target.item_end - target.pos
+              local left_words = subtitle_model.words_for_range(
+                target.words, 0, cut_offset, 0)
+              local right_words = subtitle_model.words_for_range(
+                target.words, cut_offset, item_length, cut_offset)
+              left_text = subtitle_model.text_from_words(left_words)
+              right_text = subtitle_model.text_from_words(right_words)
+              subtitle_model.set_relative_words(target.item, left_words)
+              subtitle_model.set_relative_words(right, right_words)
             else
               local ratio = (cursor - target.pos) / (target.item_end - target.pos)
               left_text, right_text = fallback_split_text(target.notes, ratio)

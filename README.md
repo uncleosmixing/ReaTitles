@@ -25,6 +25,9 @@ ReaTitles is a subtitle, dialogue-editing and offline transcription toolkit for 
 - Subtitle import.
 - Offline faster-whisper transcription with live progress.
 - Smart Split action.
+- Ripple Edit and ordinary item movement preserve subtitle text exactly.
+- Word timing is stored relative to each subtitle item and is used only by
+  explicit Smart Split or one-time legacy recovery.
 - Word `.docx` export/import for editor review.
 - Word round-trip supports text edits, paragraph reordering, deletions and colors.
 - Import creates `ПЕРЕНОС` and `УДАЛ` markers at changed joins.
@@ -64,3 +67,14 @@ Missing dependencies are reported in message boxes. Detailed diagnostics are sto
 Do not enable “show hidden text” or manually edit hidden `RTID` fields. They connect Word paragraphs to REAPER items.
 
 Before the first import, work on a copy of the REAPER project and verify the result with Undo available.
+
+## Subtitle data safety
+
+`P_NOTES` is the authoritative subtitle text. Prompter refresh, Ripple Edit,
+item movement and trimming never regenerate or overwrite it. Smart Split is the
+only editing action that divides phrase text from Whisper word timing.
+
+When Prompter first opens an older project, legacy absolute word timing is
+migrated to movement-safe relative timing. Empty notes are restored only when
+their own timing data contains an unambiguous phrase. The migration is recorded
+as one REAPER Undo step.

@@ -1,6 +1,6 @@
 -- @description Prompter
 -- @author Chirick, ReaTitles contributors
--- @version 1.2.7
+-- @version 1.3.0
 -- @changelog
 --   + Magnetic phrase editing, offline transcription and Word review round-trip
 -- @link https://github.com/uncleosmixing/ReaTitles
@@ -9,6 +9,7 @@
 --   [main] rt_transcribe_audio.lua
 --   [main] rt_smart_split.lua
 --   [nomain] ch_SubOverlay.lua
+--   [nomain] rt_subtitle_model.lua
 --   [nomain] rt_whisper_transcribe.py
 --   [nomain] rt_word_bridge.ps1
 --   [nomain] rt_word_roundtrip.lua
@@ -37,6 +38,18 @@ if not reaper.ImGui_CreateContext then
         "Missing dependency: ReaImGui.\n\n" ..
         "Install ReaImGui through ReaPack, then restart REAPER.\n" ..
         "Install it and run Prompter again.",
+        "ReaTitles dependency error", 0)
+    return
+end
+
+local script_source = (debug.getinfo(1, "S") or {}).source or ""
+local script_dir = script_source:match("^@(.+[\\/])") or ""
+local model_ok, subtitle_model =
+    pcall(dofile, script_dir .. "rt_subtitle_model.lua")
+if not model_ok then
+    reaper.ShowMessageBox(
+        "ReaTitles installation is incomplete: rt_subtitle_model.lua is missing.\n\n" ..
+        tostring(subtitle_model),
         "ReaTitles dependency error", 0)
     return
 end
@@ -712,120 +725,70 @@ local function collect_regions()
     end
 end
 
-local function rebuild_note_from_word_timing(item, fallback_metadata)
-    local _, metadata = reaper.GetSetMediaItemInfo_String(
-        item, "P_EXT:REATITLES_WORD_TIMING", "", false)
-    if (not metadata or metadata == "") and fallback_metadata and fallback_metadata ~= "" then
-        metadata = fallback_metadata
-        reaper.GetSetMediaItemInfo_String(
-            item, "P_EXT:REATITLES_WORD_TIMING", metadata, true)
-    end
-    if not metadata or metadata == "" then return nil end
-
-    local item_start = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-    local item_end = item_start + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-    local _, anchor_text = reaper.GetSetMediaItemInfo_String(
-        item, "P_EXT:REATITLES_TIMING_ANCHOR", "", false)
-    local anchor = tonumber(anchor_text)
-    local _, stored_length_text = reaper.GetSetMediaItemInfo_String(
-        item, "P_EXT:REATITLES_TIMING_LENGTH", "", false)
-    local stored_length = tonumber(stored_length_text)
-    local item_length = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-
-    local function shifted_metadata(source, delta)
-        local rows = {}
-        for row in source:gmatch("[^\r\n]+") do
-            local word_start, word_end, word =
-                row:match("^([%-%d%.]+)\t([%-%d%.]+)\t(.*)$")
-            word_start, word_end = tonumber(word_start), tonumber(word_end)
-            if word_start and word_end and word then
-                rows[#rows+1] = string.format(
-                    "%.9f\t%.9f\t%s",
-                    word_start + delta, word_end + delta, word)
-            end
-        end
-        return #rows > 0 and table.concat(rows, "\n") or source
-    end
-
-    -- Native Ripple Edit moves the item without touching P_EXT timestamps.
-    -- The anchor lets us translate every word by exactly the same delta.
-    if anchor and stored_length and
-       math.abs(item_length - stored_length) <= 0.000001 and
-       math.abs(item_start - anchor) > 0.000001 then
-        metadata = shifted_metadata(metadata, item_start - anchor)
-        reaper.GetSetMediaItemInfo_String(
-            item, "P_EXT:REATITLES_WORD_TIMING", metadata, true)
-    end
-    reaper.GetSetMediaItemInfo_String(
-        item, "P_EXT:REATITLES_TIMING_ANCHOR",
-        string.format("%.9f", item_start), true)
-    reaper.GetSetMediaItemInfo_String(
-        item, "P_EXT:REATITLES_TIMING_LENGTH",
-        string.format("%.9f", item_length), true)
-
-    local words = {}
-    local first_word_start = nil
-    for row in metadata:gmatch("[^\r\n]+") do
-        local word_start, word_end, word =
-            row:match("^([%-%d%.]+)\t([%-%d%.]+)\t(.*)$")
-        word_start, word_end = tonumber(word_start), tonumber(word_end)
-        if word_start and word_end and word then
-            first_word_start = first_word_start or word_start
-            local midpoint = (word_start + word_end) * 0.5
-            -- Start is inclusive and end is exclusive. If a split lands exactly
-            -- on a word midpoint, that word belongs only to the right item.
-            if midpoint >= item_start - 0.000001 and
-               midpoint < item_end - 0.000001 then
-                words[#words+1] = word
-            end
-        end
-    end
-    -- Legacy items have no anchor. If their old absolute timestamps are wholly
-    -- outside the item, repair them once by aligning the first word to the item.
-    if #words == 0 and not anchor and first_word_start then
-        metadata = shifted_metadata(metadata, item_start - first_word_start)
-        reaper.GetSetMediaItemInfo_String(
-            item, "P_EXT:REATITLES_WORD_TIMING", metadata, true)
-        for row in metadata:gmatch("[^\r\n]+") do
-            local word_start, word_end, word =
-                row:match("^([%-%d%.]+)\t([%-%d%.]+)\t(.*)$")
-            word_start, word_end = tonumber(word_start), tonumber(word_end)
-            if word_start and word_end and word then
-                local midpoint = (word_start + word_end) * 0.5
-                if midpoint >= item_start - 0.000001 and
-                   midpoint < item_end - 0.000001 then
-                    words[#words+1] = word
+-- One-way migration from the old movement-sensitive absolute timestamps.
+-- It never replaces non-empty P_NOTES. Empty notes are restored only when the
+-- item's own word data yields unambiguous text.
+local function migrate_legacy_word_timing()
+    local plan = {}
+    for t = 0, reaper.CountTracks(0) - 1 do
+        local track = reaper.GetTrack(0, t)
+        for i = 0, reaper.CountTrackMediaItems(track) - 1 do
+            local item = reaper.GetTrackMediaItem(track, i)
+            if not reaper.GetActiveTake(item) then
+                local legacy = subtitle_model.get_string(
+                    item, subtitle_model.LEGACY_TIMING_KEY)
+                local relative = subtitle_model.get_string(
+                    item, subtitle_model.RELATIVE_TIMING_KEY)
+                if legacy ~= "" or relative ~= "" then
+                    local words = subtitle_model.get_relative_words(item, false)
+                    local notes = subtitle_model.get_string(
+                        item, subtitle_model.NOTES_KEY)
+                    local repair_text = ""
+                    if notes == "" and #words > 0 then
+                        local item_length =
+                            reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+                        repair_text = subtitle_model.text_for_range(
+                            words, 0, item_length)
+                    end
+                    if legacy ~= "" or repair_text ~= "" then
+                        plan[#plan + 1] = {
+                            item = item,
+                            words = words,
+                            migrate = legacy ~= "",
+                            repair_text = repair_text,
+                        }
+                    end
                 end
             end
         end
     end
-    -- Never destroy P_NOTES merely because external editing made timing
-    -- metadata temporarily unusable.
-    if #words == 0 then return nil end
-    return table.concat(words):gsub("^%s+", ""):gsub("%s+$", "")
+    if #plan == 0 then return 0 end
+
+    reaper.Undo_BeginBlock()
+    reaper.PreventUIRefresh(1)
+    local repaired = 0
+    for _, entry in ipairs(plan) do
+        if reaper.ValidatePtr(entry.item, "MediaItem*") then
+            if entry.migrate and #entry.words > 0 then
+                subtitle_model.set_relative_words(entry.item, entry.words)
+            end
+            if entry.repair_text ~= "" then
+                subtitle_model.set_string(
+                    entry.item, subtitle_model.NOTES_KEY, entry.repair_text)
+                repaired = repaired + 1
+            end
+        end
+    end
+    reaper.PreventUIRefresh(-1)
+    reaper.UpdateArrange()
+    reaper.Undo_EndBlock(
+        "ReaTitles: Migrate word timing and restore empty subtitles", -1)
+    return repaired
 end
 
 local function collect_text_items()
     cur_items_by_track = {}
     local num_tracks = reaper.CountTracks(0)
-    -- Native REAPER Split may copy P_NOTES but omit P_EXT data on the new
-    -- right-hand item. Recover timing metadata from another subtitle in the
-    -- same group before rebuilding either half.
-    local timing_by_group = {}
-    for t = 0, num_tracks-1 do
-        local track = reaper.GetTrack(0, t)
-        for i = 0, reaper.CountTrackMediaItems(track)-1 do
-            local it = reaper.GetTrackMediaItem(track, i)
-            if not reaper.GetActiveTake(it) then
-                local group_id = reaper.GetMediaItemInfo_Value(it, "I_GROUPID")
-                local _, metadata = reaper.GetSetMediaItemInfo_String(
-                    it, "P_EXT:REATITLES_WORD_TIMING", "", false)
-                if group_id > 0 and metadata and metadata ~= "" then
-                    timing_by_group[group_id] = metadata
-                end
-            end
-        end
-    end
     for t = 0, num_tracks-1 do
         local track = reaper.GetTrack(0, t)
         local _, track_name = reaper.GetTrackName(track)
@@ -844,16 +807,6 @@ local function collect_text_items()
             local pos = reaper.GetMediaItemInfo_Value(it, "D_POSITION")
             local len = reaper.GetMediaItemInfo_Value(it, "D_LENGTH")
             local _, notes = reaper.GetSetMediaItemInfo_String(it, "P_NOTES", "", false)
-            local group_id = reaper.GetMediaItemInfo_Value(it, "I_GROUPID")
-            local timed_notes = nil
-            if not reaper.GetActiveTake(it) then
-                timed_notes = rebuild_note_from_word_timing(
-                    it, timing_by_group[group_id])
-            end
-            if timed_notes ~= nil and timed_notes ~= notes then
-                notes = timed_notes
-                reaper.GetSetMediaItemInfo_String(it, "P_NOTES", notes, true)
-            end
             if notes ~= "" then
                 if ignore_newlines then notes = string.gsub(notes, "\n", " ") end
                 items[#items+1] = {
@@ -946,42 +899,11 @@ local function find_grouped_items(sub_item)
     return (#result > 0) and result or boundary_matches
 end
 
-local function shift_word_timing(item, delta)
-    if math.abs(delta) < 0.0000001 then return end
-    local _, metadata = reaper.GetSetMediaItemInfo_String(
-        item, "P_EXT:REATITLES_WORD_TIMING", "", false)
-    if not metadata or metadata == "" then return end
-    local rows = {}
-    for row in metadata:gmatch("[^\r\n]+") do
-        local word_start, word_end, word =
-            row:match("^([%-%d%.]+)\t([%-%d%.]+)\t(.*)$")
-        word_start, word_end = tonumber(word_start), tonumber(word_end)
-        if word_start and word_end and word then
-            rows[#rows+1] = string.format(
-                "%.9f\t%.9f\t%s", word_start + delta, word_end + delta, word)
-        end
-    end
-    if #rows > 0 then
-        reaper.GetSetMediaItemInfo_String(
-            item, "P_EXT:REATITLES_WORD_TIMING", table.concat(rows, "\n"), true)
-        local new_anchor =
-            reaper.GetMediaItemInfo_Value(item, "D_POSITION") + delta
-        reaper.GetSetMediaItemInfo_String(
-            item, "P_EXT:REATITLES_TIMING_ANCHOR",
-            string.format("%.9f", new_anchor), true)
-        reaper.GetSetMediaItemInfo_String(
-            item, "P_EXT:REATITLES_TIMING_LENGTH",
-            string.format("%.9f",
-                reaper.GetMediaItemInfo_Value(item, "D_LENGTH")), true)
-    end
-end
-
 local function move_item_group(sub_item, new_pos)
     if not sub_item or not reaper.ValidatePtr(sub_item, "MediaItem*") then return end
     local old_pos = reaper.GetMediaItemInfo_Value(sub_item, "D_POSITION")
     local delta = new_pos - old_pos
     local grouped = find_grouped_items(sub_item)
-    shift_word_timing(sub_item, delta)
     reaper.SetMediaItemPosition(sub_item, new_pos, false)
     for _, it in ipairs(grouped) do
         if reaper.ValidatePtr(it, "MediaItem*") then
@@ -1022,8 +944,14 @@ local function save_element_text(element, text)
         reaper.GetSetMediaItemInfo_String(element.item_ptr, "P_NOTES", text, true)
         -- Manual text no longer has a trustworthy correspondence with the
         -- original Whisper words, so do not overwrite the edit on next scan.
-        reaper.GetSetMediaItemInfo_String(
-            element.item_ptr, "P_EXT:REATITLES_WORD_TIMING", "", true)
+        subtitle_model.set_string(
+            element.item_ptr, subtitle_model.RELATIVE_TIMING_KEY, "")
+        subtitle_model.set_string(
+            element.item_ptr, subtitle_model.LEGACY_TIMING_KEY, "")
+        subtitle_model.set_string(
+            element.item_ptr, subtitle_model.TIMING_ANCHOR_KEY, "")
+        subtitle_model.set_string(
+            element.item_ptr, subtitle_model.TIMING_LENGTH_KEY, "")
         local take = reaper.GetActiveTake(element.item_ptr)
         if take then
             local short = text
@@ -1111,25 +1039,27 @@ local function reorder_item(src_idx, dst_idx)
     table.insert(new_order, dst_idx, moved)
 
     local planned_positions = {}
-    planned_positions[moved] = anchor_pos
-
-    -- Translate the left side as one rigid block.
-    local last_left = new_order[dst_idx - 1]
-    if last_left then
-        local left_delta = anchor_pos - (last_left.base_pos + last_left.len)
-        for i = 1, dst_idx - 1 do
-            local entry = new_order[i]
-            planned_positions[entry] = entry.base_pos + left_delta
-        end
-    end
-
-    -- Translate the right side as one rigid block.
-    local first_right = new_order[dst_idx + 1]
-    if first_right then
-        local right_delta = (anchor_pos + moved.len) - first_right.base_pos
-        for i = dst_idx + 1, #new_order do
-            local entry = new_order[i]
-            planned_positions[entry] = entry.base_pos + right_delta
+    for i = 1, #new_order do
+        local entry = new_order[i]
+        if i < dst_idx then
+            planned_positions[entry] = entry.base_pos
+        elseif i == dst_idx then
+            if dst_idx == 1 then
+                planned_positions[entry] = entries[1].pos
+            else
+                local prev = new_order[i - 1]
+                local gap = gaps[prev.orig_idx] or 0
+                planned_positions[entry] = planned_positions[prev] + prev.len + gap
+            end
+        else
+            local prev = new_order[i - 1]
+            local gap
+            if i - 1 == dst_idx then
+                gap = gaps[moved.orig_idx] or 0
+            else
+                gap = entry.base_pos - (prev.base_pos + prev.len)
+            end
+            planned_positions[entry] = planned_positions[prev] + prev.len + gap
         end
     end
 
@@ -1267,7 +1197,6 @@ local function reorder_item(src_idx, dst_idx)
             local new_pos = planned_positions[entry]
             if new_pos then
                 local delta = new_pos - entry.pos
-                shift_word_timing(entry.ptr, delta)
                 reaper.SetMediaItemPosition(entry.ptr, new_pos, false)
                 -- Use the immutable phrase snapshot collected before anything
                 -- moved. Looking up groups here is unsafe: an earlier item may
@@ -2766,6 +2695,7 @@ end
 
 load_settings()
 load_language_strings(lang)
+migrate_legacy_word_timing()
 update()
 reaper.atexit(function()
     if custom_picker_undo_open then
