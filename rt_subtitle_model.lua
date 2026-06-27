@@ -14,6 +14,7 @@ M.RELATIVE_TIMING_KEY = "P_EXT:REATITLES_WORD_TIMING_REL"
 M.LEGACY_TIMING_KEY = "P_EXT:REATITLES_WORD_TIMING"
 M.TIMING_ANCHOR_KEY = "P_EXT:REATITLES_TIMING_ANCHOR"
 M.TIMING_LENGTH_KEY = "P_EXT:REATITLES_TIMING_LENGTH"
+M.AUDIO_WORDS_KEY = "P_EXT:REATITLES_AUDIO_WORDS"
 M.EPSILON = 0.000001
 
 function M.get_string(item, key)
@@ -138,6 +139,26 @@ end
 function M.text_for_range(words, range_start, range_end)
   return M.text_from_words(
     M.words_for_range(words, range_start, range_end, 0))
+end
+
+function M.set_audio_words(take, words)
+  -- Store in take extension state
+  M.set_string(take, M.AUDIO_WORDS_KEY, M.serialize_words(words))
+  
+  -- Rebuild take markers
+  local num_markers = reaper.CountTakeMarkers(take)
+  for i = num_markers - 1, 0, -1 do
+    reaper.DeleteTakeMarker(take, i)
+  end
+  for _, word in ipairs(words) do
+    reaper.AddTakeMarker(take, word[1], word[3])
+  end
+end
+
+function M.get_audio_words(take)
+  local data = M.get_string(take, M.AUDIO_WORDS_KEY)
+  if data == "" then return {} end
+  return M.parse_words(data)
 end
 
 return M

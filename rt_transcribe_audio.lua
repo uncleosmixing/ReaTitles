@@ -1,5 +1,5 @@
 -- @description Transcribe audio items to subtitle text items (Whisper)
--- @version 1.4.0
+-- @version 1.4.1
 -- @author ReaTitles
 -- @changelog + Initial release
 -- @about
@@ -263,6 +263,30 @@ local function store_word_timing(item, words, item_pos, rate)
   end
   if #relative_words > 0 then
     subtitle_model.set_relative_words(item, relative_words)
+  end
+end
+
+-- Store word boundaries directly on the audio take and add Take Markers.
+local function store_audio_word_timing(audio_item, words, item_pos, rate, source_offset)
+  if not audio_item or type(words) ~= "table" or #words == 0 then return end
+  local take = r.GetActiveTake(audio_item)
+  if not take then return end
+  local source_words = {}
+  for _, word in ipairs(words) do
+    if type(word) == "table" and tonumber(word[1]) and tonumber(word[2]) and
+       type(word[3]) == "string" then
+      local start_src = source_offset + tonumber(word[1]) / rate
+      local end_src = source_offset + tonumber(word[2]) / rate
+      local text = word[3]:gsub("[\r\n\t]", " ")
+      source_words[#source_words + 1] = {
+        start_src,
+        end_src,
+        text,
+      }
+    end
+  end
+  if #source_words > 0 then
+    subtitle_model.set_audio_words(take, source_words)
   end
 end
 
@@ -725,6 +749,7 @@ end
                   local sub_item = create_text_item(sub_track, seg_start, seg_end, seg[3])
                   if sub_item then
                     store_word_timing(sub_item, seg[4], item_pos, rate)
+                    store_audio_word_timing(speech_piece, seg[4], item_pos, rate, source_offset)
                     montage_model.register_transcribed_phrase(
                       speech_piece, sub_item, seg[4], source_offset)
                     r.SetMediaItemInfo_Value(speech_piece, "I_GROUPID", next_group)

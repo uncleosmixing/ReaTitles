@@ -1,6 +1,6 @@
 -- @description Prompter
 -- @author Chirick, ReaTitles contributors
--- @version 1.4.0
+-- @version 1.4.1
 -- @changelog
 --   + Magnetic phrase editing, offline transcription and Word review round-trip
 -- @link https://github.com/uncleosmixing/ReaTitles
@@ -1960,6 +1960,28 @@ local function draw_item_palette()
     reaper.ImGui_SetCursorPos(ctx, start_x, start_y + palette_height)
 end
 
+local function rebuild_markers_for_selected()
+    local sel_count = reaper.CountSelectedMediaItems(0)
+    if sel_count == 0 then
+        reaper.ShowMessageBox("Select audio items to rebuild their word markers.", TITLE, 0)
+        return
+    end
+    
+    local rebuilt = 0
+    reaper.Undo_BeginBlock()
+    for i = 0, sel_count - 1 do
+        local item = reaper.GetSelectedMediaItem(0, i)
+        if item then
+            local ok = montage_model.rebuild_take_markers(item)
+            if ok then rebuilt = rebuilt + 1 end
+        end
+    end
+    reaper.UpdateArrange()
+    reaper.Undo_EndBlock("ReaTitles: Rebuild Take Markers", -1)
+    
+    reaper.ShowMessageBox(string.format("Rebuilt take markers for %d items.", rebuilt), TITLE, 0)
+end
+
 local function topmenu()
     if reaper.ImGui_Button(ctx, str.i_import) then
         local info = debug.getinfo(1, "S")
@@ -1986,6 +2008,11 @@ local function topmenu()
         end
         invalidate_combined_cache()
         update()
+    end
+
+    reaper.ImGui_SameLine(ctx, 0, 10)
+    if reaper.ImGui_Button(ctx, "⚑ Words") then
+        rebuild_markers_for_selected()
     end
 
     reaper.ImGui_SameLine(ctx, 0, 10)

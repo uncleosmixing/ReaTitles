@@ -233,6 +233,17 @@ function M.register_transcribed_phrase(audio_item, subtitle_item, whisper_words,
   set_string(audio_item, M.PHRASE_ID_KEY, phrase_id)
   set_string(audio_item, M.MANAGED_AUDIO_KEY, "1")
   set_string(audio_item, M.SOURCE_WORDS_KEY, M.serialize_source_words(words))
+  
+  local take = r.GetActiveTake(audio_item)
+  if take then
+    local num_markers = r.CountTakeMarkers(take)
+    for i = num_markers - 1, 0, -1 do
+      r.DeleteTakeMarker(take, i)
+    end
+    for _, word in ipairs(words) do
+      r.AddTakeMarker(take, word[1], word[3])
+    end
+  end
   set_string(subtitle_item, M.PHRASE_ID_KEY, phrase_id)
   set_string(subtitle_item, M.GENERATED_SUBTITLE_KEY, "1")
   set_string(subtitle_item, M.WORD_SIGNATURE_KEY, M.word_signature(words))
@@ -662,6 +673,23 @@ function M.reconcile_project(subtitle_model)
   end
   if not ok then return changed, stats, err end
   return changed, stats
+end
+
+function M.rebuild_take_markers(audio_item)
+  local take = r.GetActiveTake(audio_item)
+  if not take then return false end
+  local words_str = get_string(audio_item, M.SOURCE_WORDS_KEY)
+  if words_str == "" then return false end
+  local words = M.parse_source_words(words_str)
+  
+  local num_markers = r.CountTakeMarkers(take)
+  for i = num_markers - 1, 0, -1 do
+    r.DeleteTakeMarker(take, i)
+  end
+  for _, word in ipairs(words) do
+    r.AddTakeMarker(take, word[1], word[3])
+  end
+  return true
 end
 
 return M
