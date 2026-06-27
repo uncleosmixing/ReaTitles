@@ -112,6 +112,8 @@ def install_ffmpeg():
 
 def find_cached_model(model_size):
     """Return a complete local faster-whisper snapshot without network access."""
+    if os.path.isdir(model_size):
+        return model_size
     repo_dir = f"models--Systran--faster-whisper-{model_size}"
     cache_roots = []
     if os.environ.get("HUGGINGFACE_HUB_CACHE"):

@@ -340,9 +340,17 @@ local function main()
   os.remove(progress_path)
   os.remove(progress_path .. ".tmp")
   os.remove(log_path)
-  local cmd = string.format('%s "%s%s" --items "%s" --output "%s" --model large-v3',
+  local model_param = "large-v3"
+  local local_model_dir = script_dir .. "models/large-v3"
+  local f_test = io.open(local_model_dir .. "/model.bin", "r")
+  if f_test then
+    f_test:close()
+    model_param = local_model_dir:gsub("\\", "/")
+  end
+
+  local cmd = string.format('%s "%s%s" --items "%s" --output "%s" --model %s',
     python, script_dir, PYTHON_SCRIPT,
-    items_path:gsub("\\","/"), output_path:gsub("\\","/"))
+    items_path:gsub("\\","/"), output_path:gsub("\\","/"), model_param)
   cmd = cmd .. string.format(' --status "%s"', status_path:gsub("\\","/"))
   cmd = cmd .. string.format(' --progress "%s"', progress_path:gsub("\\","/"))
   local is_windows = r.GetOS():match("Win") ~= nil
