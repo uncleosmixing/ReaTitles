@@ -118,14 +118,16 @@ end
 
 local function ensure_dependencies(python, script_dir)
   local whisper_check = os.execute(python .. ' -c "import faster_whisper"')
+  local whisperx_check = os.execute(python .. ' -c "import whisperx"')
   local ffmpeg_check = os.execute(
     python .. ' -c "import glob,os,shutil,sys; ' ..
     "root=os.path.join(os.environ.get('LOCALAPPDATA',''),'Microsoft','WinGet','Packages'); " ..
     "found=shutil.which('ffmpeg') or glob.glob(os.path.join(root,'Gyan.FFmpeg*','**','ffmpeg.exe'),recursive=True); " ..
     'sys.exit(0 if found else 1)"')
-  local whisper_ok = whisper_check == true or whisper_check == 0
-  local ffmpeg_ok = ffmpeg_check == true or ffmpeg_check == 0
-  if whisper_ok and ffmpeg_ok then return true end
+  local whisper_ok  = whisper_check  == true or whisper_check  == 0
+  local whisperx_ok = whisperx_check == true or whisperx_check == 0
+  local ffmpeg_ok   = ffmpeg_check   == true or ffmpeg_check   == 0
+  if whisper_ok and whisperx_ok and ffmpeg_ok then return true end
 
   local installer = script_dir .. "rt_install_dependencies.py"
   if not r.file_exists(installer) then
