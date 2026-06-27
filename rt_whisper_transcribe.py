@@ -309,30 +309,22 @@ def main():
     model = create_model(args.model, progress=emit_progress)
 
     for item_number, item in enumerate(items, 1):
-        src = item["src"]
-        start = item["start"]
+        wav = item["wav"]
         duration = max(0.0, float(item["duration"]))
         idx = item.get("index", 0)
         base_fraction = completed_duration / total_duration if total_duration > 0 else 0.0
         emit_progress(
             percent=base_fraction,
-            phase="extracting",
-            detail="Extracting audio with FFmpeg",
+            phase="transcribing",
+            detail="Preparing transcription",
             item=item_number,
             total_items=len(items),
-            current_file=os.path.basename(src),
+            current_file=os.path.basename(wav),
             text="",
         )
-        print(f"\n[Item {idx}] {os.path.basename(src)}", file=sys.stderr)
-        if not os.path.isfile(src):
-            print(f"[Item {idx}] Source not found!", file=sys.stderr)
-            all_results.append([])
-            completed_duration += duration
-            emit_progress(percent=(completed_duration / total_duration
-                                   if total_duration > 0 else item_number / len(items)))
-            continue
-        wav = os.path.join(tmpdir, f"item_{idx}.wav")
-        if not extract_audio(src, start, duration, wav, ffmpeg):
+        print(f"\n[Item {idx}] {os.path.basename(wav)}", file=sys.stderr)
+        if not os.path.isfile(wav):
+            print(f"[Item {idx}] Source WAV not found!", file=sys.stderr)
             all_results.append([])
             completed_duration += duration
             emit_progress(percent=(completed_duration / total_duration
@@ -340,21 +332,18 @@ def main():
             continue
         try:
             emit_progress(phase="transcribing", detail="Recognizing speech")
-
+            
             def on_segment(local_fraction=0.0, text="", **_):
                 processed = completed_duration + duration * local_fraction
                 overall = processed / total_duration if total_duration > 0 else 0.0
                 emit_progress(percent=overall, phase="transcribing",
                               detail="Recognizing speech", text=text)
-
+                              
             all_results.append(transcribe_file(
                 model, wav, args.language, duration=duration, progress=on_segment))
         except Exception as e:
             print(f"[Item {idx}] Error: {e}", file=sys.stderr)
             all_results.append([])
-        finally:
-            if os.path.isfile(wav):
-                os.remove(wav)
         completed_duration += duration
         emit_progress(percent=(completed_duration / total_duration
                                if total_duration > 0 else item_number / len(items)),

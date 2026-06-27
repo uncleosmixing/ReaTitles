@@ -1,5 +1,5 @@
 -- @description Transcribe audio items to subtitle text items (Whisper)
--- @version 1.6.1
+-- @version 1.7.0
 -- @author ReaTitles
 -- @changelog + Initial release
 -- @about
@@ -15,6 +15,46 @@ local r = reaper
 -- Normal users should not need the ReaScript console. Detailed diagnostics are
 -- written to rt_transcribe.log and rt_setup.log instead.
 local function msg(_) end
+
+local function export_take_to_wav(take, start_time, duration, output_path)
+  local accessor = r.CreateTakeAudioAccessor(take)
+  if not accessor then return false end
+  
+  local sample_rate = 16000
+  local channels = 1
+  local num_samples = math.floor(duration * sample_rate)
+  if num_samples <= 0 then
+    r.DestroyAudioAccessor(accessor)
+    return false
+  end
+  
+  local buffer = r.new_array(num_samples)
+  local ok = r.GetAudioAccessorSamples(accessor, sample_rate, channels, start_time, num_samples, buffer)
+  r.DestroyAudioAccessor(accessor)
+  
+  if ok <= 0 then return false end
+  
+  local tbl = buffer.table()
+  local sample_strings = {}
+  for i = 1, #tbl do
+    local val = math.max(-32768, math.min(32767, math.floor((tbl[i] or 0) * 32767)))
+    sample_strings[i] = string.pack("<h", val)
+  end
+  local pcm_data = table.concat(sample_strings)
+  local data_size = #pcm_data
+  local file_size = data_size + 44
+  
+  local header = string.pack("<c4 I4 c4 c4 I4 H H I4 I4 H H c4 I4",
+    "RIFF", file_size - 8, "WAVE", "fmt ", 16, 1, 1, 16000, 32000, 2, 16, "data", data_size
+  )
+  
+  local f = io.open(output_path, "wb")
+  if not f then return false end
+  f:write(header)
+  f:write(pcm_data)
+  f:close()
+  return true
+end
 
 local function get_script_dir()
   local info = debug.getinfo(1, "S")
@@ -332,21 +372,19 @@ local function main()
     if item then
       local take = r.GetActiveTake(item)
       if take then
-        local src = r.GetMediaItemTake_Source(take)
-        if src then
-          local src_name = r.GetMediaSourceFileName(src, "")
-          if src_name and src_name ~= "" then
-            local len = r.GetMediaItemInfo_Value(item, "D_LENGTH")
-            local rate = r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
-            local offs = r.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
-            -- D_STARTOFFS is already expressed in source-media seconds.
-            local src_off = math.max(0, offs)
-            items_json[#items_json+1] = {
-              src = src_name, start = src_off,
-              duration = len * rate, index = #items_json + 1
-            }
-            source_items[#source_items+1] = item
-          end
+        local len = r.GetMediaItemInfo_Value(item, "D_LENGTH")
+        local rate = r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
+        local offs = r.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
+        local src_off = math.max(0, offs)
+        local item_idx = #items_json + 1
+        local temp_wav_path = script_dir .. "rt_temp_item_" .. item_idx .. ".wav"
+        if export_take_to_wav(take, src_off, len * rate, temp_wav_path) then
+          items_json[#items_json+1] = {
+            wav = temp_wav_path,
+            duration = len * rate,
+            index = item_idx
+          }
+          source_items[#source_items+1] = item
         end
       end
     end
@@ -437,6 +475,9 @@ local function main()
     os.remove(status_path .. ".tmp")
     os.remove(progress_path)
     os.remove(progress_path .. ".tmp")
+    for idx = 1, #items_json do
+      os.remove(script_dir .. "rt_temp_item_" .. idx .. ".wav")
+    end
   end
 
   local function read_progress()
@@ -674,80 +715,28 @@ end
           if rate <= 0 then rate = 1 end
           local source_offset = take and
             r.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS") or 0
-          local item_end = item_pos + item_len
-          table.sort(segments, function(a, b) return a[1] < b[1] end)
-
-          local remainder = src_item
-          for seg_index, seg in ipairs(segments) do
-            if type(seg) == "table" and tonumber(seg[1]) and tonumber(seg[2]) and
-               type(seg[3]) == "string" and remainder and
-               r.ValidatePtr(remainder, "MediaItem*") then
-              local raw_start = tonumber(seg[1]) / rate
-              local raw_end = tonumber(seg[2]) / rate
-              local pad = 0.15 -- safety pad in seconds
-
-              -- 1. Speech onset detection for segment start
-              local seg_start = item_pos + raw_start
-              local onset = find_speech_onset(take, math.max(item_pos, seg_start - 1.2), seg_start + 0.5, -45)
-              if onset then
-                seg_start = math.max(item_pos, onset - pad)
-              else
-                seg_start = math.max(item_pos, seg_start - 0.25)
-              end
-
-              -- 2. Speech offset detection for segment end
-              local next_seg = segments[seg_index + 1]
-              local seg_end
-              if type(next_seg) == "table" and tonumber(next_seg[1]) then
-                local next_start = tonumber(next_seg[1]) / rate
-                local next_onset = find_speech_onset(take, math.max(item_pos, item_pos + next_start - 1.2), item_pos + next_start + 0.5, -45)
-                local target_next_start = next_onset and math.max(item_pos, next_onset - pad) or (item_pos + next_start - 0.25)
-
-                local current_raw_end = item_pos + raw_end
-                local offset = find_speech_offset(take, current_raw_end - 0.5, math.min(item_end, current_raw_end + 1.2), -45)
-                local target_current_end = offset and math.min(item_end, offset + pad) or (current_raw_end + 0.25)
-
-                if target_next_start >= target_current_end then
-                  -- Silence gap exists: split exactly in the middle of silence gap
-                  seg_end = (target_current_end + target_next_start) * 0.5
-                else
-                  -- Overlapping boundaries: split at midpoint of speech overlap
-                  seg_end = (target_current_end + target_next_start) * 0.5
-                end
-              else
-                -- Last segment
-                local current_raw_end = item_pos + raw_end
-                local offset = find_speech_offset(take, current_raw_end - 0.5, math.min(item_end, current_raw_end + 1.2), -45)
-                seg_end = offset and math.min(item_end, offset + pad) or math.min(item_end, current_raw_end + 0.25)
-              end
-              seg_end = math.min(item_end, math.max(seg_start, seg_end))
-              if seg_end - seg_start > 0.01 then
-                local rem_pos = r.GetMediaItemInfo_Value(remainder, "D_POSITION")
-                local rem_end = rem_pos + r.GetMediaItemInfo_Value(remainder, "D_LENGTH")
-                local speech_piece = remainder
-                if seg_start > rem_pos + 0.000001 then
-                  speech_piece = r.SplitMediaItem(remainder, seg_start)
-                end
-                if speech_piece and r.ValidatePtr(speech_piece, "MediaItem*") then
-                  local speech_end = r.GetMediaItemInfo_Value(speech_piece, "D_POSITION") +
-                                     r.GetMediaItemInfo_Value(speech_piece, "D_LENGTH")
-                  if seg_end < speech_end - 0.000001 then
-                    remainder = r.SplitMediaItem(speech_piece, seg_end)
-                  else
-                    remainder = nil
-                  end
-                  local take = r.GetActiveTake(speech_piece)
-                  if take then
-                    local short = seg[3]
-                    if #short > 40 then short = short:sub(1, 40) .. "..." end
-                    r.GetSetMediaItemTakeInfo_String(take, "P_NAME", short, true)
-                    store_audio_word_timing(speech_piece, seg[4], item_pos, rate, source_offset)
-                    r.GetSetMediaItemInfo_String(speech_piece, "P_EXT:REATITLES_MANAGED_AUDIO", "1", true)
-                    created = created + 1
-                  end
+          
+          -- Collect all words and build full text
+          local all_words = {}
+          local text_parts = {}
+          for _, seg in ipairs(segments) do
+            if type(seg) == "table" and type(seg[3]) == "string" then
+              table.insert(text_parts, seg[3])
+              local seg_words = seg[4]
+              if type(seg_words) == "table" then
+                for _, w in ipairs(seg_words) do
+                  table.insert(all_words, w)
                 end
               end
             end
+          end
+          local full_text = table.concat(text_parts, " ")
+          
+          if take then
+            r.GetSetMediaItemInfo_String(src_item, "P_NOTES", full_text, true)
+            store_audio_word_timing(src_item, all_words, item_pos, rate, source_offset)
+            r.GetSetMediaItemInfo_String(src_item, "P_EXT:REATITLES_MANAGED_AUDIO", "1", true)
+            created = created + 1
           end
         end
       end
