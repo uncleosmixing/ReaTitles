@@ -1,6 +1,10 @@
-# ReaTitles
+# Uncle Os ReaScripts
 
-ReaTitles is a subtitle, dialogue-editing and offline transcription toolkit for REAPER.
+The Uncle Os ReaPack repository contains:
+
+- **ReaTitles** - subtitle, dialogue-editing and offline transcription tools.
+- **Room Control Center** - a dockable monitoring, metering, reference playback
+  and headphone correction center.
 
 ## Installation through ReaPack
 
@@ -10,14 +14,16 @@ ReaTitles is a subtitle, dialogue-editing and offline transcription toolkit for 
 
    `https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/index.xml`
 
-4. Synchronize packages and search for **ReaTitles**.
-5. Select and install all four ReaTitles packages:
+4. Synchronize packages.
+5. Search for **ReaTitles** or **Room Control Center**.
+6. For ReaTitles, select the required packages:
    - ReaTitles - Core
    - ReaTitles - Offline Transcription
    - ReaTitles - Smart Split
    - ReaTitles - SubOverlay
-6. Restart REAPER.
-7. Run the installed ReaTitles actions from the Action List.
+7. For RCC, install **Room Control Center**.
+8. Restart REAPER.
+9. Run the installed actions from the Action List.
 
 ## Included tools
 
