@@ -1,6 +1,6 @@
 -- @description Prompter
 -- @author Chirick, ReaTitles contributors
--- @version 1.4.4
+-- @version 1.4.5
 -- @changelog
 --   + Magnetic phrase editing, offline transcription and Word review round-trip
 -- @link https://github.com/uncleosmixing/ReaTitles
@@ -820,10 +820,48 @@ local function collect_text_items()
             local pos = reaper.GetMediaItemInfo_Value(it, "D_POSITION")
             local len = reaper.GetMediaItemInfo_Value(it, "D_LENGTH")
             local _, notes = reaper.GetSetMediaItemInfo_String(it, "P_NOTES", "", false)
+            local is_managed_audio = false
+            if notes == "" then
+                if reaper.GetSetMediaItemInfo_String(it, "P_EXT:REATITLES_MANAGED_AUDIO", "", false) == "1" then
+                    is_managed_audio = true
+                    local take = reaper.GetActiveTake(it)
+                    if take then
+                        local words = subtitle_model.get_audio_words(take)
+                        if #words > 0 then
+                            local start_offs = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
+                            local playrate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
+                            if playrate <= 0 then playrate = 1 end
+                            local end_offs = start_offs + len * playrate
+                            local active_words = {}
+                            for _, w in ipairs(words) do
+                                local w_mid = (w[1] + w[2]) * 0.5
+                                if w_mid >= start_offs - 0.005 and w_mid < end_offs + 0.005 then
+                                    table.insert(active_words, w)
+                                end
+                            end
+                            if #active_words > 0 then
+                                notes = subtitle_model.text_from_words(active_words)
+                            end
+                        end
+                        if notes == "" then
+                            local _, take_name = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+                            notes = take_name
+                        end
+                    end
+                end
+            else
+                if reaper.GetSetMediaItemInfo_String(it, "P_EXT:REATITLES_MANAGED_AUDIO", "", false) == "1" then
+                    is_managed_audio = true
+                end
+            end
+
             if notes ~= "" then
-                local review = montage_model.get_phrase_id(it) ~= "" and
-                    subtitle_model.get_string(
-                        it, montage_model.REVIEW_KEY) or ""
+                local review = ""
+                if not is_managed_audio then
+                    review = montage_model.get_phrase_id(it) ~= "" and
+                        subtitle_model.get_string(
+                            it, montage_model.REVIEW_KEY) or ""
+                end
                 if ignore_newlines then notes = string.gsub(notes, "\n", " ") end
                 items[#items+1] = {
                     start_time = pos,
@@ -832,7 +870,7 @@ local function collect_text_items()
                     end_str    = format_time(pos + len),
                     name       = notes,
                     track_name = track_name,
-                    type       = "text_item",
+                    type       = is_managed_audio and "audio_item" or "text_item",
                     item_ptr   = it,
                     group_id   = reaper.GetMediaItemInfo_Value(it, "I_GROUPID"),
                     custom_color = reaper.GetMediaItemInfo_Value(it, "I_CUSTOMCOLOR"),

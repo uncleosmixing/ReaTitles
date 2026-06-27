@@ -1,5 +1,5 @@
 -- @description Transcribe audio items to subtitle text items (Whisper)
--- @version 1.4.4
+-- @version 1.4.5
 -- @author ReaTitles
 -- @changelog + Initial release
 -- @about
@@ -662,18 +662,7 @@ end
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
     local mutation_ok, mutation_err = pcall(function()
-      local sub_track = find_or_create_track()
       local created = 0
-      local max_group = 0
-      for ti = 0, r.CountTracks(0)-1 do
-        local tr = r.GetTrack(0, ti)
-        for j = 0, r.CountTrackMediaItems(tr)-1 do
-          local it = r.GetTrackMediaItem(tr, j)
-          max_group = math.max(max_group, r.GetMediaItemInfo_Value(it, "I_GROUPID"))
-        end
-      end
-      local next_group = max_group + 1
-
       for i, src_item in ipairs(source_items) do
         local segments = results[i]
         if r.ValidatePtr(src_item, "MediaItem*") and segments and #segments > 0 then
@@ -746,15 +735,13 @@ end
                   else
                     remainder = nil
                   end
-                  local sub_item = create_text_item(sub_track, seg_start, seg_end, seg[3])
-                  if sub_item then
-                    store_word_timing(sub_item, seg[4], item_pos, rate)
+                  local take = r.GetActiveTake(speech_piece)
+                  if take then
+                    local short = seg[3]
+                    if #short > 40 then short = short:sub(1, 40) .. "..." end
+                    r.GetSetMediaItemTakeInfo_String(take, "P_NAME", short, true)
                     store_audio_word_timing(speech_piece, seg[4], item_pos, rate, source_offset)
-                    montage_model.register_transcribed_phrase(
-                      speech_piece, sub_item, seg[4], source_offset)
-                    r.SetMediaItemInfo_Value(speech_piece, "I_GROUPID", next_group)
-                    r.SetMediaItemInfo_Value(sub_item, "I_GROUPID", next_group)
-                    next_group = next_group + 1
+                    r.GetSetMediaItemInfo_String(speech_piece, "P_EXT:REATITLES_MANAGED_AUDIO", "1", true)
                     created = created + 1
                   end
                 end
@@ -763,7 +750,7 @@ end
           end
         end
       end
-      r.ShowMessageBox(string.format("Done! Created %d subtitle items.", created), "ReaTitles", 0)
+      r.ShowMessageBox(string.format("Done! Transcribed %d segments and generated Take Markers.", created), "ReaTitles", 0)
     end)
     r.PreventUIRefresh(-1)
     r.UpdateArrange()
