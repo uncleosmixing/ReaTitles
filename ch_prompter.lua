@@ -1,6 +1,6 @@
 -- @description Prompter
 -- @author Chirick, ReaTitles contributors
--- @version 1.3.2
+-- @version 1.3.3
 -- @changelog
 --   + Magnetic phrase editing, offline transcription and Word review round-trip
 -- @link https://github.com/uncleosmixing/ReaTitles
@@ -2699,7 +2699,7 @@ local function sync_subtitles_to_audio()
         end
     end
 
-    -- Collect all audio items by group_id from other tracks
+    -- Collect all audio items by group_id from non-subtitle tracks
     local audios_by_group = {}
     for i = 0, reaper.CountTracks(0) - 1 do
         local tr = reaper.GetTrack(0, i)
@@ -2715,7 +2715,6 @@ local function sync_subtitles_to_audio()
         end
     end
 
-    -- Find all active group IDs
     local all_groups = {}
     for g, _ in pairs(subs_by_group) do all_groups[g] = true end
     for g, _ in pairs(audios_by_group) do all_groups[g] = true end
@@ -2723,11 +2722,11 @@ local function sync_subtitles_to_audio()
     local changed = false
 
     for g, _ in pairs(all_groups) do
-        local subs = subs_by_group[g] or {}
+        local subs   = subs_by_group[g]   or {}
         local audios = audios_by_group[g] or {}
 
+        -- Case 1: no audio at all for this group → delete subtitle items
         if #audios == 0 and #subs > 0 then
-            -- Delete remaining subtitle items if audio was deleted
             if not changed then
                 reaper.Undo_BeginBlock()
                 reaper.PreventUIRefresh(1)
@@ -2738,90 +2737,36 @@ local function sync_subtitles_to_audio()
                     reaper.DeleteTrackMediaItem(sub_track, sub_item)
                 end
             end
+
+        -- Case 2: both audio and subtitles exist
         elseif #audios > 0 and #subs > 0 then
-            -- Check for required splits first
-            local split_occurred = false
-            for _, audio_item in ipairs(audios) do
-                local audio_pos = reaper.GetMediaItemInfo_Value(audio_item, "D_POSITION")
-                
-                -- Check if this audio_pos falls inside any subtitle item
-                for idx, sub_item in ipairs(subs) do
+
+            -- Build lookup: for each subtitle item get its time range
+            local function overlaps_any_sub(audio_pos, audio_end)
+                for _, sub_item in ipairs(subs) do
                     if reaper.ValidatePtr(sub_item, "MediaItem*") then
-                        local sub_pos = reaper.GetMediaItemInfo_Value(sub_item, "D_POSITION")
-                        local sub_len = reaper.GetMediaItemInfo_Value(sub_item, "D_LENGTH")
-                        local sub_end = sub_pos + sub_len
-                        
-                        if audio_pos > sub_pos + 0.005 and audio_pos < sub_end - 0.005 then
-                            if not changed then
-                                reaper.Undo_BeginBlock()
-                                reaper.PreventUIRefresh(1)
-                                changed = true
-                            end
-                            local new_right = split_subtitle_item(sub_item, audio_pos)
-                            if new_right then
-                                table.insert(subs, new_right)
-                                split_occurred = true
-                            end
-                        end
+                        local sp = reaper.GetMediaItemInfo_Value(sub_item, "D_POSITION")
+                        local se = sp + reaper.GetMediaItemInfo_Value(sub_item, "D_LENGTH")
+                        local ov = math.min(audio_end, se) - math.max(audio_pos, sp)
+                        if ov > 0.02 then return true end
                     end
                 end
+                return false
             end
 
-            -- If split occurred, refresh list of subtitle items for this group
-            if split_occurred then
-                subs = {}
-                for i = 0, reaper.CountTrackMediaItems(sub_track) - 1 do
-                    local item = reaper.GetTrackMediaItem(sub_track, i)
-                    if reaper.GetMediaItemInfo_Value(item, "I_GROUPID") == g then
-                        table.insert(subs, item)
-                    end
-                end
-            end
-
-            -- Match each subtitle item to its best overlapping audio item
-            for _, sub_item in ipairs(subs) do
-                if reaper.ValidatePtr(sub_item, "MediaItem*") then
-                    local sub_pos = reaper.GetMediaItemInfo_Value(sub_item, "D_POSITION")
-                    local sub_len = reaper.GetMediaItemInfo_Value(sub_item, "D_LENGTH")
-                    local sub_end = sub_pos + sub_len
-
-                    local best_audio = nil
-                    local max_overlap = -1
-
-                    for _, audio_item in ipairs(audios) do
-                        local audio_pos = reaper.GetMediaItemInfo_Value(audio_item, "D_POSITION")
-                        local audio_len = reaper.GetMediaItemInfo_Value(audio_item, "D_LENGTH")
-                        local audio_end = audio_pos + audio_len
-
-                        local overlap = math.min(sub_end, audio_end) - math.max(sub_pos, audio_pos)
-                        if overlap > max_overlap then
-                            max_overlap = overlap
-                            best_audio = audio_item
-                        end
-                    end
-
-                    if best_audio and max_overlap > 0.005 then
-                        -- Sync position and length
-                        local audio_pos = reaper.GetMediaItemInfo_Value(best_audio, "D_POSITION")
-                        local audio_len = reaper.GetMediaItemInfo_Value(best_audio, "D_LENGTH")
-
-                        if math.abs(sub_pos - audio_pos) > 0.005 or math.abs(sub_len - audio_len) > 0.005 then
-                            if not changed then
-                                reaper.Undo_BeginBlock()
-                                reaper.PreventUIRefresh(1)
-                                changed = true
-                            end
-                            reaper.SetMediaItemPosition(sub_item, audio_pos, false)
-                            reaper.SetMediaItemLength(sub_item, audio_len, false)
-                        end
-                    else
-                        -- No overlapping audio item -> delete subtitle
+            -- For each audio item: if it does NOT overlap any subtitle → ungroup it
+            for _, audio_item in ipairs(audios) do
+                if reaper.ValidatePtr(audio_item, "MediaItem*") then
+                    local ap = reaper.GetMediaItemInfo_Value(audio_item, "D_POSITION")
+                    local ae = ap + reaper.GetMediaItemInfo_Value(audio_item, "D_LENGTH")
+                    if not overlaps_any_sub(ap, ae) then
                         if not changed then
                             reaper.Undo_BeginBlock()
                             reaper.PreventUIRefresh(1)
                             changed = true
                         end
-                        reaper.DeleteTrackMediaItem(sub_track, sub_item)
+                        -- Remove from group (set group id to 0)
+                        reaper.SetMediaItemInfo_Value(audio_item, "I_GROUPID", 0)
                     end
                 end
             end
@@ -2831,9 +2776,10 @@ local function sync_subtitles_to_audio()
     if changed then
         reaper.PreventUIRefresh(-1)
         reaper.UpdateArrange()
-        reaper.Undo_EndBlock("ReaTitles: Background sync to audio", -1)
+        reaper.Undo_EndBlock("ReaTitles: Ungroup breath/silence items", -1)
     end
 end
+
 
 local function loop()
     cursor = reaper.GetCursorPosition()                             -- cursor position
@@ -2850,6 +2796,7 @@ local function loop()
         drag_drop_idx = nil
         drag_offset_y = nil
         drag_start_y = nil
+        sync_subtitles_to_audio()
         invalidate_combined_cache()
         update()
     end
