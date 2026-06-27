@@ -1,5 +1,5 @@
 -- @description Transcribe audio items to subtitle text items (Whisper)
--- @version 1.5.3
+-- @version 1.5.4
 -- @author ReaTitles
 -- @changelog + Initial release
 -- @about

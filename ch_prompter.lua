@@ -1,6 +1,6 @@
 -- @description Prompter
 -- @author Chirick, ReaTitles contributors
--- @version 1.5.3
+-- @version 1.5.4
 -- @changelog
 --   + Magnetic phrase editing, offline transcription and Word review round-trip
 -- @link https://github.com/uncleosmixing/ReaTitles

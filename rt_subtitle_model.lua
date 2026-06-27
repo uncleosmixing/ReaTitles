@@ -177,12 +177,13 @@ function M.snap_word_to_onset(take, w_start, prev_end_time)
     take, peakrate, search_start, numchannels, numsamples, want_extra_type, peaks
   )
   
-  if retval <= 0 then return w_start end
+  local actual_samples = retval % 1048576
+  if actual_samples <= 0 then return w_start end
   
   local max_vals = {}
   local global_max = 0
   local global_min = 1
-  for idx = 0, numsamples - 1 do
+  for idx = 0, actual_samples - 1 do
     local val = math.abs(peaks[idx] or 0)
     max_vals[idx + 1] = val
     if val > global_max then global_max = val end
@@ -197,7 +198,7 @@ function M.snap_word_to_onset(take, w_start, prev_end_time)
   threshold = math.max(threshold, 0.008)
   
   local onset_idx = nil
-  for idx = 1, numsamples - 1 do
+  for idx = 1, actual_samples - 1 do
     if max_vals[idx] >= threshold and max_vals[idx + 1] >= threshold then
       onset_idx = idx
       break
