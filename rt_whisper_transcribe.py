@@ -244,35 +244,50 @@ def align_words_to_onsets(wav_path, words):
             return words
             
         aligned_words = []
-        for word in words:
+        for wi, word in enumerate(words):
             w_start, w_end, text = word
             
-            target_idx = int((w_start * 16000 - win_size/2) / hop_size)
-            target_idx = max(0, min(n_blocks - 1, target_idx))
+            # Define search window in seconds to prevent overlapping previous speech
+            if wi == 0:
+                search_start_sec = max(0.0, w_start - 0.300)
+            else:
+                prev_end = aligned_words[wi-1][1]
+                search_start_sec = max(prev_end - 0.020, w_start - 0.080)
+                
+            search_end_sec = w_start + 0.120
             
-            # Search backwards 250ms (100 blocks) and forwards 120ms (48 blocks)
-            search_start = max(0, target_idx - 100)
-            search_end = min(n_blocks - 1, target_idx + 48)
+            search_start = int((search_start_sec * 16000 - win_size/2) / hop_size)
+            search_start = max(0, min(n_blocks - 1, search_start))
             
-            local_rms = rms[search_start : search_end + 1]
-            local_min = np.min(local_rms)
-            local_max = np.max(local_rms)
+            search_end = int((search_end_sec * 16000 - win_size/2) / hop_size)
+            search_end = max(0, min(n_blocks - 1, search_end))
             
-            # Speech onset threshold: 8% of local dynamic range above floor
-            threshold = local_min + 0.08 * (local_max - local_min)
-            threshold = max(threshold, 0.006)  # absolute floor
+            if search_end >= search_start:
+                local_rms = rms[search_start : search_end + 1]
+                local_min = np.min(local_rms)
+                local_max = np.max(local_rms)
+                
+                # Threshold: 12% above dynamic floor
+                threshold = local_min + 0.12 * (local_max - local_min)
+                threshold = max(threshold, 0.008)  # absolute noise floor
+                
+                onset_idx = None
+                for b in range(search_start, search_end + 1):
+                    if rms[b] >= threshold:
+                        if b + 1 < n_blocks and rms[b+1] >= threshold:
+                            onset_idx = b
+                            break
+                
+                if onset_idx is not None:
+                    new_start = (onset_idx * hop_size + win_size / 2) / 16000.0
+                    if abs(new_start - w_start) < 0.250:
+                        w_start = round(new_start, 3)
             
-            onset_idx = None
-            for b in range(search_start, search_end + 1):
-                if rms[b] >= threshold:
-                    if b + 1 < n_blocks and rms[b+1] >= threshold:
-                        onset_idx = b
-                        break
-            
-            if onset_idx is not None:
-                new_start = (onset_idx * hop_size + win_size / 2) / 16000.0
-                if abs(new_start - w_start) < 0.30:
-                    w_start = round(new_start, 3)
+            # Enforce sequential order
+            if wi > 0:
+                prev_start = aligned_words[wi-1][0]
+                if w_start < prev_start + 0.030:
+                    w_start = prev_start + 0.030
                     
             aligned_words.append([w_start, w_end, text])
             
