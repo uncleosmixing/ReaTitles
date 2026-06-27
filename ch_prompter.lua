@@ -3,7 +3,7 @@
 -- @version 1.7.1
 -- @changelog
 --   + Magnetic phrase editing, offline transcription and Word review round-trip
--- @link https://github.com/uncleosmixing/ReaTitles
+-- @link https://github.com/uncleosmixing/Uncle-Os
 -- @provides
 --   [main] ch_import_text_items_from_sub.lua
 --   [main] rt_transcribe_audio.lua

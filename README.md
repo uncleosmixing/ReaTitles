@@ -12,7 +12,7 @@ The Uncle Os ReaPack repository contains:
 2. In REAPER open `Extensions > ReaPack > Import repositories`.
 3. Add:
 
-   `https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/index.xml`
+   `https://raw.githubusercontent.com/uncleosmixing/Uncle-Os/main/index.xml`
 
 4. Synchronize packages.
 5. Search for **ReaTitles** or **Room Control Center**.

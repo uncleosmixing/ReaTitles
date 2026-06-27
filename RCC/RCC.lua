@@ -3,7 +3,7 @@
 -- @version 1.0.1
 -- @changelog
 --   + Initial ReaPack release
--- @link https://github.com/uncleosmixing/ReaTitles
+-- @link https://github.com/uncleosmixing/Uncle-Os
 -- @about
 --   # Room Control Center
 --
