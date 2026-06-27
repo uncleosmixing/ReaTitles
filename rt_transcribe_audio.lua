@@ -1,5 +1,5 @@
 -- @description Transcribe audio items to subtitle text items (Whisper)
--- @version 1.5.6
+-- @version 1.5.7
 -- @author ReaTitles
 -- @changelog + Initial release
 -- @about
@@ -374,6 +374,7 @@ local function main()
   os.remove(progress_path)
   os.remove(progress_path .. ".tmp")
   os.remove(log_path)
+  os.remove(script_dir .. "rt_sync.log")
   local model_param = "large-v3"
   local local_model_dir = script_dir .. "models/large-v3"
   local f_test = io.open(local_model_dir .. "/model.bin", "r")

@@ -1,5 +1,5 @@
 -- @description ReaTitles Smart Split
--- @version 1.5.6
+-- @version 1.5.7
 -- @author ReaTitles
 -- @about
 --   Split selected subtitle/audio groups at the edit cursor.

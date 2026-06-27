@@ -151,9 +151,19 @@ function M.text_for_range(words, range_start, range_end)
 end
 
 function M.snap_word_to_onset(take, w_start, prev_end_time)
-  local search_start = w_start - 0.08
+  local function log_debug(msg)
+    local f = io.open("c:\\Users\\uncle\\Desktop\\Development\\Development\\ReaTitles\\rt_sync.log", "a")
+    if f then
+      f:write(msg .. "\n")
+      f:close()
+    end
+    reaper.ShowConsoleMsg(msg .. "\n")
+  end
+
+  -- Determine search range
+  local search_start = w_start - 0.40
   if not prev_end_time or prev_end_time == 0 then
-    search_start = w_start - 0.30
+    search_start = w_start - 0.60
   else
     if search_start < prev_end_time then
       search_start = prev_end_time
@@ -161,13 +171,19 @@ function M.snap_word_to_onset(take, w_start, prev_end_time)
   end
   if search_start < 0 then search_start = 0 end
   
-  local search_end = w_start + 0.12
+  local search_end = w_start + 0.30
   local duration = search_end - search_start
-  if duration <= 0.005 then return w_start end
+  if duration <= 0.005 then 
+    log_debug(string.format("[Onset Sync] w_start: %.3f - skipped (duration too small)", w_start))
+    return w_start 
+  end
   
   local peakrate = 250 -- 4ms resolution
   local numsamples = math.floor(duration * peakrate)
-  if numsamples < 5 then return w_start end
+  if numsamples < 5 then 
+    log_debug(string.format("[Onset Sync] w_start: %.3f - skipped (samples count too small: %d)", w_start, numsamples))
+    return w_start 
+  end
   
   local numchannels = 1
   local want_extra_type = 0
@@ -177,7 +193,11 @@ function M.snap_word_to_onset(take, w_start, prev_end_time)
     take, peakrate, search_start, numchannels, numsamples, want_extra_type, peaks
   )
   
-  if retval <= 0 then return w_start end
+  if retval <= 0 then 
+    log_debug(string.format("[Onset Sync] w_start: %.3f - GetPeaks failed (%d)", w_start, retval))
+    return w_start 
+  end
+  
   local actual_samples = retval % 1048576
   if actual_samples > numsamples then
     actual_samples = numsamples
@@ -185,16 +205,12 @@ function M.snap_word_to_onset(take, w_start, prev_end_time)
   
   local tbl = peaks.table()
   local tbl_len = #tbl
-  
-  -- Print diagnostics to REAPER Console
-  reaper.ShowConsoleMsg(string.format(
-    "[Onset Sync] w_start: %.3f, retval: %d, actual_samples: %d, requested: %d, peaks_len: %d\n",
-    w_start, retval, actual_samples, numsamples, tbl_len
-  ))
-  
-  -- Safe guard actual_samples against the converted table length
   local safe_samples = math.min(actual_samples, math.floor(tbl_len / 2))
-  if safe_samples <= 0 then return w_start end
+  
+  if safe_samples <= 0 then 
+    log_debug(string.format("[Onset Sync] w_start: %.3f - safe_samples <= 0", w_start))
+    return w_start 
+  end
   
   local max_vals = {}
   local global_max = 0
@@ -206,11 +222,12 @@ function M.snap_word_to_onset(take, w_start, prev_end_time)
     if val < global_min then global_min = val end
   end
   
-  if global_max < 0.005 then
+  if global_max < 0.008 then
+    log_debug(string.format("[Onset Sync] w_start: %.3f - quiet segment (max: %.4f)", w_start, global_max))
     return w_start
   end
   
-  local threshold = global_min + 0.12 * (global_max - global_min)
+  local threshold = global_min + 0.10 * (global_max - global_min)
   threshold = math.max(threshold, 0.008)
   
   local onset_idx = nil
@@ -223,11 +240,16 @@ function M.snap_word_to_onset(take, w_start, prev_end_time)
   
   if onset_idx then
     local onset_time = search_start + (onset_idx - 1) / peakrate
-    if math.abs(onset_time - w_start) < 0.25 then
+    if math.abs(onset_time - w_start) < 0.55 then
+      log_debug(string.format("[Onset Sync] w_start: %.3f -> snapped to %.3f (shift: %.3f, max: %.3f, thresh: %.3f)", 
+        w_start, onset_time, onset_time - w_start, global_max, threshold))
       return onset_time
+    else
+      log_debug(string.format("[Onset Sync] w_start: %.3f -> snap candidate %.3f rejected (shift too large)", w_start, onset_time))
     end
   end
   
+  log_debug(string.format("[Onset Sync] w_start: %.3f -> no onset found (max: %.3f, thresh: %.3f)", w_start, global_max, threshold))
   return w_start
 end
 
