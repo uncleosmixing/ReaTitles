@@ -496,6 +496,120 @@ local function main()
       return true
     end
 
+local function find_speech_onset(take, start_time, end_time, threshold_db)
+  local accessor = r.CreateTakeAudioAccessor(take)
+  if not accessor then return nil end
+  
+  local source = r.GetMediaItemTake_Source(take)
+  local sample_rate = r.GetMediaSourceSampleRate(source)
+  local channels = 1
+  
+  local duration = end_time - start_time
+  local num_samples = math.floor(duration * sample_rate)
+  local buffer = r.new_array(num_samples)
+  
+  local ok = r.GetAudioAccessorSamples(accessor, sample_rate, channels, start_time, num_samples, buffer)
+  r.DestroyAudioAccessor(accessor)
+  if ok <= 0 then return nil end
+  
+  local samples = buffer.table()
+  local block_size = math.floor(sample_rate * 0.01) -- 10ms block
+  local num_blocks = math.floor(#samples / block_size)
+  local envelopes = {}
+  
+  local max_env = 0
+  local min_env = 1
+  
+  for b = 1, num_blocks do
+    local sum = 0
+    local start_idx = (b - 1) * block_size + 1
+    for s = start_idx, start_idx + block_size - 1 do
+      local val = samples[s] or 0
+      sum = sum + val * val
+    end
+    local rms = math.sqrt(sum / block_size)
+    envelopes[b] = rms
+    if rms > max_env then max_env = rms end
+    if rms < min_env then min_env = rms end
+  end
+  
+  local threshold = 10 ^ (threshold_db / 20)
+  local dynamic_threshold = min_env + 0.05 * (max_env - min_env)
+  local final_threshold = math.max(threshold, dynamic_threshold)
+  
+  local onset_block = nil
+  for b = 1, num_blocks - 3 do
+    if envelopes[b] > final_threshold and
+       envelopes[b+1] > final_threshold and
+       envelopes[b+2] > final_threshold then
+      onset_block = b
+      break
+    end
+  end
+  
+  if onset_block then
+    return start_time + (onset_block - 1) * 0.01
+  end
+  return nil
+end
+
+local function find_speech_offset(take, start_time, end_time, threshold_db)
+  local accessor = r.CreateTakeAudioAccessor(take)
+  if not accessor then return nil end
+  
+  local source = r.GetMediaItemTake_Source(take)
+  local sample_rate = r.GetMediaSourceSampleRate(source)
+  local channels = 1
+  
+  local duration = end_time - start_time
+  local num_samples = math.floor(duration * sample_rate)
+  local buffer = r.new_array(num_samples)
+  
+  local ok = r.GetAudioAccessorSamples(accessor, sample_rate, channels, start_time, num_samples, buffer)
+  r.DestroyAudioAccessor(accessor)
+  if ok <= 0 then return nil end
+  
+  local samples = buffer.table()
+  local block_size = math.floor(sample_rate * 0.01) -- 10ms block
+  local num_blocks = math.floor(#samples / block_size)
+  local envelopes = {}
+  
+  local max_env = 0
+  local min_env = 1
+  
+  for b = 1, num_blocks do
+    local sum = 0
+    local start_idx = (b - 1) * block_size + 1
+    for s = start_idx, start_idx + block_size - 1 do
+      local val = samples[s] or 0
+      sum = sum + val * val
+    end
+    local rms = math.sqrt(sum / block_size)
+    envelopes[b] = rms
+    if rms > max_env then max_env = rms end
+    if rms < min_env then min_env = rms end
+  end
+  
+  local threshold = 10 ^ (threshold_db / 20)
+  local dynamic_threshold = min_env + 0.05 * (max_env - min_env)
+  local final_threshold = math.max(threshold, dynamic_threshold)
+  
+  local offset_block = nil
+  for b = num_blocks - 3, 1, -1 do
+    if envelopes[b] > final_threshold and
+       envelopes[b+1] > final_threshold and
+       envelopes[b+2] > final_threshold then
+      offset_block = b + 3
+      break
+    end
+  end
+  
+  if offset_block then
+    return start_time + (offset_block - 1) * 0.01
+  end
+  return nil
+end
+
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
     local mutation_ok, mutation_err = pcall(function()
@@ -527,17 +641,43 @@ local function main()
             if type(seg) == "table" and tonumber(seg[1]) and tonumber(seg[2]) and
                type(seg[3]) == "string" and remainder and
                r.ValidatePtr(remainder, "MediaItem*") then
-              local seg_start = math.max(item_pos, item_pos + tonumber(seg[1]) / rate)
-              local seg_end
-              local next_seg = segments[seg_index + 1]
-              if type(next_seg) == "table" and tonumber(next_seg[1]) then
-                -- Keep phrase blocks contiguous: the current phrase (and its
-                -- audio piece) ends exactly where the next phrase begins.
-                -- Thus pauses belong to the phrase before them and no orphaned
-                -- gap items remain between recognized phrases.
-                seg_end = item_pos + tonumber(next_seg[1]) / rate
+              local raw_start = tonumber(seg[1]) / rate
+              local raw_end = tonumber(seg[2]) / rate
+              local pad = 0.15 -- safety pad in seconds
+
+              -- 1. Speech onset detection for segment start
+              local seg_start = item_pos + raw_start
+              local onset = find_speech_onset(take, math.max(item_pos, seg_start - 1.2), seg_start + 0.5, -45)
+              if onset then
+                seg_start = math.max(item_pos, onset - pad)
               else
-                seg_end = item_pos + tonumber(seg[2]) / rate
+                seg_start = math.max(item_pos, seg_start - 0.25)
+              end
+
+              -- 2. Speech offset detection for segment end
+              local next_seg = segments[seg_index + 1]
+              local seg_end
+              if type(next_seg) == "table" and tonumber(next_seg[1]) then
+                local next_start = tonumber(next_seg[1]) / rate
+                local next_onset = find_speech_onset(take, math.max(item_pos, item_pos + next_start - 1.2), item_pos + next_start + 0.5, -45)
+                local target_next_start = next_onset and math.max(item_pos, next_onset - pad) or (item_pos + next_start - 0.25)
+
+                local current_raw_end = item_pos + raw_end
+                local offset = find_speech_offset(take, current_raw_end - 0.5, math.min(item_end, current_raw_end + 1.2), -45)
+                local target_current_end = offset and math.min(item_end, offset + pad) or (current_raw_end + 0.25)
+
+                if target_next_start >= target_current_end then
+                  -- Silence gap exists: split exactly in the middle of silence gap
+                  seg_end = (target_current_end + target_next_start) * 0.5
+                else
+                  -- Overlapping boundaries: split at midpoint of speech overlap
+                  seg_end = (target_current_end + target_next_start) * 0.5
+                end
+              else
+                -- Last segment
+                local current_raw_end = item_pos + raw_end
+                local offset = find_speech_offset(take, current_raw_end - 0.5, math.min(item_end, current_raw_end + 1.2), -45)
+                seg_end = offset and math.min(item_end, offset + pad) or math.min(item_end, current_raw_end + 0.25)
               end
               seg_end = math.min(item_end, math.max(seg_start, seg_end))
               if seg_end - seg_start > 0.01 then
