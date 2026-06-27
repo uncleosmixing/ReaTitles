@@ -1,5 +1,5 @@
 -- @description Transcribe audio items to subtitle text items (Whisper)
--- @version 1.2.6
+-- @version 1.2.7
 -- @author ReaTitles
 -- @changelog + Initial release
 -- @about
@@ -240,6 +240,13 @@ local function store_word_timing(item, words, item_pos, rate)
   if #rows > 0 then
     r.GetSetMediaItemInfo_String(
       item, "P_EXT:REATITLES_WORD_TIMING", table.concat(rows, "\n"), true)
+    local anchor = r.GetMediaItemInfo_Value(item, "D_POSITION")
+    r.GetSetMediaItemInfo_String(
+      item, "P_EXT:REATITLES_TIMING_ANCHOR",
+      string.format("%.9f", anchor), true)
+    r.GetSetMediaItemInfo_String(
+      item, "P_EXT:REATITLES_TIMING_LENGTH",
+      string.format("%.9f", r.GetMediaItemInfo_Value(item, "D_LENGTH")), true)
   end
 end
 

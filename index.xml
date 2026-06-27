@@ -11,7 +11,7 @@ Prompter, subtitle import, phrase colors, magnetic editing and Word `.docx` revi
 Requires ReaImGui.
         ]]></description>
       </metadata>
-      <version name="1.2.6" author="Chirick, ReaTitles contributors">
+      <version name="1.2.7" author="Chirick, ReaTitles contributors">
         <source main="main">https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/ch_prompter.lua</source>
         <source main="main" file="ch_import_text_items_from_sub.lua">https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/ch_import_text_items_from_sub.lua</source>
         <source main="main" file="rt_word_roundtrip.lua">https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/rt_word_roundtrip.lua</source>
@@ -30,7 +30,7 @@ Transcribes selected audio locally and creates grouped subtitle items.
 Requires Python 3, faster-whisper, FFmpeg, a local Whisper model and ReaImGui for the progress window.
         ]]></description>
       </metadata>
-      <version name="1.2.6" author="ReaTitles contributors">
+      <version name="1.2.7" author="ReaTitles contributors">
         <source main="main">https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/rt_transcribe_audio.lua</source>
         <source file="rt_whisper_transcribe.py">https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/rt_whisper_transcribe.py</source>
         <source file="rt_install_dependencies.py">https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/rt_install_dependencies.py</source>
@@ -45,7 +45,7 @@ Requires Python 3, faster-whisper, FFmpeg, a local Whisper model and ReaImGui fo
 Splits grouped phrase audio and subtitle items while preserving word timing metadata.
         ]]></description>
       </metadata>
-      <version name="1.2.6" author="ReaTitles contributors">
+      <version name="1.2.7" author="ReaTitles contributors">
         <source main="main">https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/rt_smart_split.lua</source>
       </version>
     </reapack>
@@ -60,7 +60,7 @@ Displays project subtitles in a dedicated overlay window.
 Requires ReaImGui.
         ]]></description>
       </metadata>
-      <version name="1.2.6" author="Chirick, ReaTitles contributors">
+      <version name="1.2.7" author="Chirick, ReaTitles contributors">
         <source main="main">https://raw.githubusercontent.com/uncleosmixing/ReaTitles/main/ch_SubOverlay.lua</source>
       </version>
     </reapack>

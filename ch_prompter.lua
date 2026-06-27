@@ -1,6 +1,6 @@
 -- @description Prompter
 -- @author Chirick, ReaTitles contributors
--- @version 1.2.6
+-- @version 1.2.7
 -- @changelog
 --   + Magnetic phrase editing, offline transcription and Word review round-trip
 -- @link https://github.com/uncleosmixing/ReaTitles
@@ -724,12 +724,53 @@ local function rebuild_note_from_word_timing(item, fallback_metadata)
 
     local item_start = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
     local item_end = item_start + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+    local _, anchor_text = reaper.GetSetMediaItemInfo_String(
+        item, "P_EXT:REATITLES_TIMING_ANCHOR", "", false)
+    local anchor = tonumber(anchor_text)
+    local _, stored_length_text = reaper.GetSetMediaItemInfo_String(
+        item, "P_EXT:REATITLES_TIMING_LENGTH", "", false)
+    local stored_length = tonumber(stored_length_text)
+    local item_length = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+
+    local function shifted_metadata(source, delta)
+        local rows = {}
+        for row in source:gmatch("[^\r\n]+") do
+            local word_start, word_end, word =
+                row:match("^([%-%d%.]+)\t([%-%d%.]+)\t(.*)$")
+            word_start, word_end = tonumber(word_start), tonumber(word_end)
+            if word_start and word_end and word then
+                rows[#rows+1] = string.format(
+                    "%.9f\t%.9f\t%s",
+                    word_start + delta, word_end + delta, word)
+            end
+        end
+        return #rows > 0 and table.concat(rows, "\n") or source
+    end
+
+    -- Native Ripple Edit moves the item without touching P_EXT timestamps.
+    -- The anchor lets us translate every word by exactly the same delta.
+    if anchor and stored_length and
+       math.abs(item_length - stored_length) <= 0.000001 and
+       math.abs(item_start - anchor) > 0.000001 then
+        metadata = shifted_metadata(metadata, item_start - anchor)
+        reaper.GetSetMediaItemInfo_String(
+            item, "P_EXT:REATITLES_WORD_TIMING", metadata, true)
+    end
+    reaper.GetSetMediaItemInfo_String(
+        item, "P_EXT:REATITLES_TIMING_ANCHOR",
+        string.format("%.9f", item_start), true)
+    reaper.GetSetMediaItemInfo_String(
+        item, "P_EXT:REATITLES_TIMING_LENGTH",
+        string.format("%.9f", item_length), true)
+
     local words = {}
+    local first_word_start = nil
     for row in metadata:gmatch("[^\r\n]+") do
         local word_start, word_end, word =
             row:match("^([%-%d%.]+)\t([%-%d%.]+)\t(.*)$")
         word_start, word_end = tonumber(word_start), tonumber(word_end)
         if word_start and word_end and word then
+            first_word_start = first_word_start or word_start
             local midpoint = (word_start + word_end) * 0.5
             -- Start is inclusive and end is exclusive. If a split lands exactly
             -- on a word midpoint, that word belongs only to the right item.
@@ -739,6 +780,28 @@ local function rebuild_note_from_word_timing(item, fallback_metadata)
             end
         end
     end
+    -- Legacy items have no anchor. If their old absolute timestamps are wholly
+    -- outside the item, repair them once by aligning the first word to the item.
+    if #words == 0 and not anchor and first_word_start then
+        metadata = shifted_metadata(metadata, item_start - first_word_start)
+        reaper.GetSetMediaItemInfo_String(
+            item, "P_EXT:REATITLES_WORD_TIMING", metadata, true)
+        for row in metadata:gmatch("[^\r\n]+") do
+            local word_start, word_end, word =
+                row:match("^([%-%d%.]+)\t([%-%d%.]+)\t(.*)$")
+            word_start, word_end = tonumber(word_start), tonumber(word_end)
+            if word_start and word_end and word then
+                local midpoint = (word_start + word_end) * 0.5
+                if midpoint >= item_start - 0.000001 and
+                   midpoint < item_end - 0.000001 then
+                    words[#words+1] = word
+                end
+            end
+        end
+    end
+    -- Never destroy P_NOTES merely because external editing made timing
+    -- metadata temporarily unusable.
+    if #words == 0 then return nil end
     return table.concat(words):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
@@ -901,6 +964,15 @@ local function shift_word_timing(item, delta)
     if #rows > 0 then
         reaper.GetSetMediaItemInfo_String(
             item, "P_EXT:REATITLES_WORD_TIMING", table.concat(rows, "\n"), true)
+        local new_anchor =
+            reaper.GetMediaItemInfo_Value(item, "D_POSITION") + delta
+        reaper.GetSetMediaItemInfo_String(
+            item, "P_EXT:REATITLES_TIMING_ANCHOR",
+            string.format("%.9f", new_anchor), true)
+        reaper.GetSetMediaItemInfo_String(
+            item, "P_EXT:REATITLES_TIMING_LENGTH",
+            string.format("%.9f",
+                reaper.GetMediaItemInfo_Value(item, "D_LENGTH")), true)
     end
 end
 
