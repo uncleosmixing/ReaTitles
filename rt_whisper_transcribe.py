@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 rt_whisper_transcribe.py - Transcribe audio using WhisperX (forced alignment)
 for frame-accurate word-level timestamps.
@@ -22,6 +23,7 @@ os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 CPU_COUNT = multiprocessing.cpu_count()
+WHISPERX_ALIGNMENT_FAILED = False
 
 HAVE_WHISPERX = False
 try:
@@ -29,6 +31,23 @@ try:
     HAVE_WHISPERX = True
 except ImportError:
     pass
+
+
+def set_hf_offline(enabled):
+    """Update both environment flags and libraries that cache offline mode."""
+    value = "1" if enabled else "0"
+    os.environ["HF_HUB_OFFLINE"] = value
+    os.environ["TRANSFORMERS_OFFLINE"] = value
+    try:
+        import huggingface_hub.constants as hf_constants
+        hf_constants.HF_HUB_OFFLINE = enabled
+    except Exception:
+        pass
+    try:
+        import transformers.utils.hub as transformers_hub
+        transformers_hub._is_offline_mode = enabled
+    except Exception:
+        pass
 
 
 def write_status(path, payload):
@@ -87,7 +106,10 @@ def find_cached_model(model_size):
     return None
 
 
-# ── WhisperX backend ────────────────�def transcribe_whisperx(wav_path, model_size, language, duration, emit_progress):
+# WhisperX backend
+
+
+def transcribe_whisperx(wav_path, model_size, language, duration, emit_progress):
     import whisperx
 
     device = "cpu"
@@ -100,8 +122,7 @@ def find_cached_model(model_size):
         local_only = True
         print(f"[WhisperX] Using cached model: {cached}", file=sys.stderr)
     else:
-        os.environ["HF_HUB_OFFLINE"] = "0"
-        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+        set_hf_offline(False)
         model_source = model_size
         local_only = False
         print(f"[WhisperX] Downloading model: {model_size}", file=sys.stderr)
@@ -127,8 +148,7 @@ def find_cached_model(model_size):
         local_files_only=local_only,
         threads=CPU_COUNT,
     )
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    set_hf_offline(True)
     print(f"[WhisperX] Whisper loaded in {time.time()-t0:.1f}s", file=sys.stderr)
     emit_progress(phase="model_ready", detail="Whisper ready, loading audio")
 
@@ -159,10 +179,10 @@ def find_cached_model(model_size):
 
     # Step 2: Forced alignment with wav2vec2
     emit_progress(phase="aligning", detail="Forced alignment (wav2vec2) - first run downloads ~300MB")
-    os.environ["HF_HUB_OFFLINE"] = "0"
-    os.environ["TRANSFORMERS_OFFLINE"] = "0"
+    set_hf_offline(False)
     t0 = time.time()
     aligned = False
+    alignment_error = None
     try:
         align_model, metadata = whisperx.load_align_model(
             language_code=detected_lang, device=device)
@@ -173,11 +193,23 @@ def find_cached_model(model_size):
         print(f"[WhisperX] Alignment done in {time.time()-t0:.1f}s", file=sys.stderr)
         del align_model  # free memory
     except Exception as e:
-        print(f"[WhisperX] Alignment failed ({type(e).__name__}: {e}) - using Whisper timestamps",
+        print(f"[WhisperX] Alignment failed ({type(e).__name__}: {e}) - using stable-whisper fallback",
               file=sys.stderr)
+        alignment_error = e
     finally:
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        set_hf_offline(True)
+
+    if alignment_error is not None:
+        global WHISPERX_ALIGNMENT_FAILED
+        WHISPERX_ALIGNMENT_FAILED = True
+        emit_progress(
+            phase="aligning",
+            detail="Alignment unavailable; switching to stable-whisper word timing")
+        # Unaligned WhisperX segments contain no word timestamps. ReaTitles
+        # needs those timestamps to distinguish removed speech from silence,
+        # so use the same cached model through stable-whisper as a fallback.
+        return transcribe_stable(
+            wav_path, model_size, language, duration, emit_progress)
 
     emit_progress(phase="aligning", detail=f"Alignment {'OK' if aligned else 'skipped (fallback)'}")
 
@@ -203,9 +235,6 @@ def find_cached_model(model_size):
         print(f"[WhisperX] {seg.get('start', 0):.2f}-{seg.get('end', 0):.2f}: {text}",
               file=sys.stderr)
     return result_data
-WhisperX] {seg.get('start', 0):.2f}-{seg.get('end', 0):.2f}: {text}",
-              file=sys.stderr)
-    return result_data
 
 
 # ── stable-whisper fallback backend ──────────────────────────────────────────
@@ -216,8 +245,7 @@ def transcribe_stable(wav_path, model_size, language, duration, emit_progress):
         model_source = cached
         local_only = True
     else:
-        os.environ["HF_HUB_OFFLINE"] = "0"
-        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+        set_hf_offline(False)
         model_source = model_size
         local_only = False
         print(f"[stable-whisper] Downloading model: {model_size}", file=sys.stderr)
@@ -229,8 +257,7 @@ def transcribe_stable(wav_path, model_size, language, duration, emit_progress):
         model_source, device="cpu", compute_type="int8",
         cpu_threads=CPU_COUNT, num_workers=min(4, CPU_COUNT),
         local_files_only=local_only)
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    set_hf_offline(True)
     print(f"[stable-whisper] Model loaded in {time.time()-t0:.1f}s", file=sys.stderr)
     emit_progress(phase="model_ready", detail="Model ready")
 
@@ -321,10 +348,12 @@ def main():
             continue
 
         try:
-            if backend == "whisperx":
+            if backend == "whisperx" and not WHISPERX_ALIGNMENT_FAILED:
                 segments = transcribe_whisperx(
                     wav, args.model, args.language, duration, emit_progress)
             else:
+                if backend == "whisperx":
+                    progress_state["backend"] = "stable"
                 segments = transcribe_stable(
                     wav, args.model, args.language, duration, emit_progress)
             all_results.append(segments)

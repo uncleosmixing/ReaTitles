@@ -31,7 +31,7 @@ Transcribes selected audio locally and creates grouped subtitle items.
 Requires Python 3, faster-whisper, FFmpeg, a local Whisper model and ReaImGui for the progress window.
         ]]></description>
       </metadata>
-      <version name="1.8.2" author="ReaTitles contributors">
+      <version name="1.8.3" author="ReaTitles contributors">
         <source main="main">https://raw.githubusercontent.com/uncleosmixing/ReaScripts/main/rt_transcribe_audio.lua</source>
         <source file="rt_whisper_transcribe.py">https://raw.githubusercontent.com/uncleosmixing/ReaScripts/main/rt_whisper_transcribe.py</source>
         <source file="rt_install_dependencies.py">https://raw.githubusercontent.com/uncleosmixing/ReaScripts/main/rt_install_dependencies.py</source>

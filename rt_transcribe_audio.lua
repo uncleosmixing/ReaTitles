@@ -1,5 +1,5 @@
 -- @description Transcribe audio items to subtitle text items (Whisper)
--- @version 1.7.1
+-- @version 1.8.3
 -- @author ReaTitles
 -- @changelog + Initial release
 -- @about
@@ -119,6 +119,7 @@ end
 local function ensure_dependencies(python, script_dir)
   local whisper_check = os.execute(python .. ' -c "import faster_whisper"')
   local whisperx_check = os.execute(python .. ' -c "import whisperx"')
+  local stable_check = os.execute(python .. ' -c "import stable_whisper"')
   local ffmpeg_check = os.execute(
     python .. ' -c "import glob,os,shutil,sys; ' ..
     "root=os.path.join(os.environ.get('LOCALAPPDATA',''),'Microsoft','WinGet','Packages'); " ..
@@ -126,8 +127,9 @@ local function ensure_dependencies(python, script_dir)
     'sys.exit(0 if found else 1)"')
   local whisper_ok  = whisper_check  == true or whisper_check  == 0
   local whisperx_ok = whisperx_check == true or whisperx_check == 0
+  local stable_ok   = stable_check   == true or stable_check   == 0
   local ffmpeg_ok   = ffmpeg_check   == true or ffmpeg_check   == 0
-  if whisper_ok and whisperx_ok and ffmpeg_ok then return true end
+  if whisper_ok and whisperx_ok and stable_ok and ffmpeg_ok then return true end
 
   local installer = script_dir .. "rt_install_dependencies.py"
   if not r.file_exists(installer) then
@@ -152,6 +154,8 @@ local function ensure_dependencies(python, script_dir)
 
   msg("[ReaTitles SETUP] Installing missing transcription dependencies in the background.")
   if not whisper_ok then msg("[ReaTitles SETUP] Missing: faster-whisper") end
+  if not whisperx_ok then msg("[ReaTitles SETUP] Missing: whisperx") end
+  if not stable_ok then msg("[ReaTitles SETUP] Missing: stable-whisper") end
   if not ffmpeg_ok then msg("[ReaTitles SETUP] Missing: FFmpeg") end
   msg("[ReaTitles SETUP] REAPER remains available. Run transcription again after success.")
   local started = r.time_precise()
@@ -384,6 +388,27 @@ local function main()
 
   local script_dir = get_script_dir()
 
+  -- Fail before exporting audio if a damaged/incomplete ReaPack update left
+  -- the Python backend syntactically invalid. Without this check Python exits
+  -- before it can create rt_status.json and the progress window would appear
+  -- to remain at 0% forever.
+  local backend_path = script_dir .. PYTHON_SCRIPT
+  local compile_code, compile_output = r.ExecProcess(
+    string.format('%s -m py_compile "%s"', python, backend_path), 15000)
+  if tonumber(compile_code) ~= 0 then
+    local compile_log = io.open(script_dir .. "rt_transcribe.log", "w")
+    if compile_log then
+      compile_log:write(tostring(compile_output or "Python compile failed"))
+      compile_log:close()
+    end
+    r.ShowMessageBox(
+      "The ReaTitles transcription backend is damaged and cannot start.\n\n" ..
+      tostring(compile_output or "Python compile failed") ..
+      "\n\nUpdate ReaTitles through ReaPack.",
+      "ReaTitles transcription error", 0)
+    return
+  end
+
   if not ensure_dependencies(python, script_dir) then return end
 
   -- Collect items
@@ -485,6 +510,7 @@ local function main()
     item = 0, total_items = #items_json, current_file = "", text = "", elapsed = 0
   }
   local displayed_percent = 0
+  local progress_seen = false
 
   local phase_labels = {
     starting = "Запуск",
@@ -516,8 +542,25 @@ local function main()
     local ok, value = pcall(json_decode, content)
     if ok and type(value) == "table" then
       cached_progress = value
+      progress_seen = true
     end
     return cached_progress
+  end
+
+  local function read_startup_error()
+    if progress_seen then return nil end
+    local log_file = io.open(log_path, "r")
+    if not log_file then return nil end
+    local content = log_file:read("*a") or ""
+    log_file:close()
+    if content:find("SyntaxError", 1, true) or
+       content:find("IndentationError", 1, true) or
+       content:find("ModuleNotFoundError", 1, true) or
+       content:find("can't open file", 1, true) or
+       content:find("is not recognized", 1, true) then
+      return content
+    end
+    return nil
   end
 
   local function draw_progress()
@@ -783,6 +826,15 @@ end
   local function poll()
     draw_progress()
     if finish_transcription() then return end
+    local startup_error = read_startup_error()
+    if startup_error then
+      cleanup_temp()
+      r.ShowMessageBox(
+        "Transcription could not start:\n\n" .. startup_error ..
+        "\nLog:\n" .. log_path,
+        "ReaTitles transcription error", 0)
+      return
+    end
     if r.time_precise() - started_at > 7200 then
       cleanup_temp()
       r.ShowMessageBox("Transcription timed out after two hours.\nSee:\n" .. log_path, "ReaTitles", 0)
