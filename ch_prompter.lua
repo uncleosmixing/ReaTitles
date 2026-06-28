@@ -1,6 +1,6 @@
 -- @description Prompter
 -- @author Chirick, ReaTitles contributors
--- @version 1.8.7
+-- @version 1.8.8
 -- @changelog
 --   + Magnetic phrase editing, offline transcription and Word review round-trip
 -- @link https://github.com/uncleosmixing/ReaScripts
@@ -1341,7 +1341,7 @@ local function create_combined_list()
                     end_str = item.end_str,
                     name = item.name,
                     track_name = item.track_name,
-                    type = "text_item",
+                    type = item.type,
                     source_type = "text_items",
                     source_order = track_order,
                     item_ptr = item.item_ptr,
@@ -1396,13 +1396,9 @@ local function get_combo_list()
 
         -- Show only unmuted tracks in combo list
         if not is_muted then
-        local short_name = (#track_name > 9)
-            and (string.sub(track_name, -9))
-            or track_name
-
         combo_sources[#combo_sources+1] = {
             guid  = "items_" .. tostring(track_guid),
-            name  = short_name,
+            name  = track_name,
             kind  = "text_items",
             track = track_name,  -- full name (for debugging)
             data  = items_list
@@ -2485,6 +2481,13 @@ local function draw_list()
                                 if reaper.ImGui_Button(ctx, word_text) then
                                     reaper.SetEditCurPos(wl_pos, true, false)
                                 end
+                                if reaper.ImGui_IsItemHovered(ctx) and
+                                   reaper.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                                    editing_idx = i
+                                    edit_buf = r.name or ""
+                                    edit_focus_pending = true
+                                    edit_had_focus = false
+                                end
                                 reaper.ImGui_PopStyleColor(ctx, 1)
                                 reaper.ImGui_PopID(ctx)
                                 
@@ -3009,6 +3012,7 @@ load_settings()
 load_language_strings(lang)
 migrate_legacy_word_timing()
 montage_model.reconcile_project(subtitle_model)
+montage_model.sync_audio_notes_to_words(subtitle_model)
 update()
 reaper.atexit(function()
     if custom_picker_undo_open then

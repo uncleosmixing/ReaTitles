@@ -161,6 +161,25 @@ local function reset()
   tracks[2].items = {}
 end
 
+-- Text edited before marker synchronization was introduced is repaired when
+-- Prompter starts: the item note remains authoritative and marker timing stays
+-- unchanged.
+reset()
+do
+  local repaired_item = audio(24, 2, 24)
+  repaired_item.strings.P_NOTES = "Vivol"
+  repaired_item.strings[montage_model.MANAGED_AUDIO_KEY] = "1"
+  subtitle_model.set_audio_words(repaired_item.take, {
+    { 24.405, 25.192, " виброл." },
+  })
+  local repaired = montage_model.sync_audio_notes_to_words(subtitle_model)
+  assert(repaired == 1)
+  local repaired_words = subtitle_model.get_audio_words(repaired_item.take)
+  assert(repaired_words[1][1] == 24.405 and repaired_words[1][2] == 25.192)
+  assert(repaired_words[1][3]:find("Vivol", 1, true))
+  assert(repaired_item.take.markers[1].name:find("Vivol", 1, true))
+end
+
 local function mark_phrase(audio_items, subtitle_items, words, signature)
   local phrase_id = "phrase1"
   local serialized = montage_model.serialize_source_words(words)

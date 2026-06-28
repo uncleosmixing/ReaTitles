@@ -348,6 +348,55 @@ function M.apply_text_to_audio_item(audio_item, text, subtitle_model)
   return true
 end
 
+function M.sync_audio_notes_to_words(subtitle_model)
+  if not subtitle_model then return 0 end
+  local plan = {}
+  for ti = 0, r.CountTracks(0) - 1 do
+    local track = r.GetTrack(0, ti)
+    for i = 0, r.CountTrackMediaItems(track) - 1 do
+      local item = r.GetTrackMediaItem(track, i)
+      local take = r.GetActiveTake(item)
+      local notes = get_string(item, "P_NOTES")
+      if take and notes ~= "" and
+         get_string(item, M.MANAGED_AUDIO_KEY) == "1" then
+        local words = subtitle_model.get_audio_words(take)
+        local mapping = take_mapping(item)
+        local active_words = {}
+        if mapping then
+          for _, word in ipairs(words) do
+            local midpoint = (word[1] + word[2]) * 0.5
+            if midpoint >= mapping.source_start - M.EPSILON and
+               midpoint < mapping.source_end + M.EPSILON then
+              active_words[#active_words + 1] = word
+            end
+          end
+        end
+        local tokens = text_tokens(notes)
+        if #tokens > 0 and #tokens == #active_words then
+          local differs = false
+          for index, token in ipairs(tokens) do
+            local marker_word =
+              tostring(active_words[index][3] or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if marker_word ~= token then
+              differs = true
+              break
+            end
+          end
+          if differs then plan[#plan + 1] = { item = item, text = notes } end
+        end
+      end
+    end
+  end
+  if #plan == 0 then return 0 end
+  r.Undo_BeginBlock()
+  for _, entry in ipairs(plan) do
+    M.apply_text_to_audio_item(entry.item, entry.text, subtitle_model)
+  end
+  r.UpdateArrange()
+  r.Undo_EndBlock("ReaTitles: Synchronize edited text with word markers", -1)
+  return #plan
+end
+
 local function migrate_group_pairs(all_items, subtitle_track, subtitle_model,
                                    change)
   local groups = {}
